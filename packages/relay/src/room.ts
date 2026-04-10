@@ -1,4 +1,3 @@
-import type { WebSocket } from 'ws';
 import {
     verifyCapChain,
     verifyEnvelope,
@@ -17,8 +16,21 @@ import {
     type UnsubscribePayload,
 } from 'openroom-sdk';
 
+/**
+ * Minimum WebSocket interface the relay core needs. Both Node's `ws`
+ * package and the Cloudflare Workers runtime WebSocket (via `WebSocketPair`)
+ * satisfy this shape, so the same core runs in both environments without
+ * conditional imports.
+ */
+export interface RelayWebSocket {
+    send(data: string): void;
+    close(code?: number, reason?: string): void;
+    readonly readyState: number;
+}
+
 interface Agent {
-    ws: WebSocket;
+    ws: RelayWebSocket;
+    roomName: string;
     sessionPubkey: string;
     displayName?: string;
     description?: string;
@@ -84,32 +96,51 @@ export class RelayCore {
     // envelopes, and without it `subscribe` / `create_topic` replays would
     // be trivially accepted within the ±5 min timestamp window.
     private recentEnvelopes = new Map<string, number>();
+    // Per-connection state keyed by WebSocket reference. Lets the platform
+    // glue (Node ws.on handlers or CF DO webSocket event listeners) look up
+    // the Agent from the ws object without smuggling it through closures.
+    private connections = new Map<RelayWebSocket, Agent>();
 
-    acceptConnection(ws: WebSocket, roomName: string, challengeNonce: string) {
+    /**
+     * Register a new incoming WebSocket for the given room. Sends the
+     * `challenge` event. The caller is responsible for wiring the ws's
+     * message / close / error events to `deliverMessage` and `detach`.
+     */
+    attach(
+        ws: RelayWebSocket,
+        roomName: string,
+        challengeNonce: string
+    ) {
         const agent: Agent = {
             ws,
+            roomName,
             sessionPubkey: '',
             joined: false,
             challengeNonce,
         };
-
+        this.connections.set(ws, agent);
         this.sendEvent(ws, { type: 'challenge', nonce: challengeNonce });
+    }
 
-        ws.on('message', (data) => {
-            this.handleMessage(agent, roomName, data.toString());
-        });
+    /** Process an inbound text frame from an attached connection. */
+    deliverMessage(ws: RelayWebSocket, raw: string) {
+        const agent = this.connections.get(ws);
+        if (!agent) return;
+        this.handleMessage(agent, agent.roomName, raw);
+    }
 
-        ws.on('close', () => {
-            if (agent.joined) {
-                this.handleLeave(agent, roomName);
-            }
-        });
-
-        ws.on('error', () => {
-            if (agent.joined) {
-                this.handleLeave(agent, roomName);
-            }
-        });
+    /**
+     * Release a connection. Call this from ws close or error events. If the
+     * agent had successfully joined, this broadcasts `agents_changed` to
+     * the rest of the room via the leave handler.
+     */
+    detach(ws: RelayWebSocket) {
+        const agent = this.connections.get(ws);
+        if (!agent) return;
+        this.connections.delete(ws);
+        if (agent.joined) {
+            this.handleLeave(agent, agent.roomName);
+        }
     }
 
     private handleMessage(agent: Agent, roomName: string, raw: string) {
@@ -713,17 +744,17 @@ export class RelayCore {
         }
     }
 
-    private sendEvent(ws: WebSocket, event: ServerEvent) {
+    private sendEvent(ws: RelayWebSocket, event: ServerEvent) {
         if (ws.readyState === WS_OPEN) {
             ws.send(JSON.stringify(event));
         }
     }
 
-    private sendResult(ws: WebSocket, result: ServerEvent) {
+    private sendResult(ws: RelayWebSocket, result: ServerEvent) {
         this.sendEvent(ws, result);
     }
 
-    private sendError(ws: WebSocket, reason: string) {
+    private sendError(ws: RelayWebSocket, reason: string) {
         this.sendEvent(ws, { type: 'error', reason });
     }
 

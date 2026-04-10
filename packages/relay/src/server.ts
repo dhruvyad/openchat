@@ -20,7 +20,12 @@ export function startRelay(port: number): Promise<RelayHandle> {
                 return;
             }
             const roomName = decodeURIComponent(match[1]!);
-            core.acceptConnection(ws, roomName, randomNonce());
+            core.attach(ws, roomName, randomNonce());
+            ws.on('message', (data) => {
+                core.deliverMessage(ws, data.toString());
+            });
+            ws.on('close', () => core.detach(ws));
+            ws.on('error', () => core.detach(ws));
         });
 
         wss.on('listening', () => {
