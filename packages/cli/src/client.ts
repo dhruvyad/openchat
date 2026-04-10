@@ -4,6 +4,7 @@ import {
     makeEnvelope,
     toBase64Url,
     verifyEnvelope,
+    type Cap,
     type CreateTopicPayload,
     type CreateTopicResult,
     type JoinPayload,
@@ -42,19 +43,24 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 5000;
 
+export interface ClientKeypair {
+    privateKey: Uint8Array;
+    publicKey: Uint8Array;
+}
+
 export class Client {
     private ws: WebSocket;
-    private privateKey: Uint8Array;
-    private publicKey: Uint8Array;
+    private _privateKey: Uint8Array;
+    private _publicKey: Uint8Array;
     private joined = false;
     private joinResolve?: () => void;
     private joinReject?: (err: Error) => void;
     private pending = new Map<string, PendingRequest>();
 
-    constructor(private opts: ClientOptions) {
-        const kp = generateKeypair();
-        this.privateKey = kp.privateKey;
-        this.publicKey = kp.publicKey;
+    constructor(private opts: ClientOptions, keypair?: ClientKeypair) {
+        const kp = keypair ?? generateKeypair();
+        this._privateKey = kp.privateKey;
+        this._publicKey = kp.publicKey;
 
         const baseUrl = opts.relayUrl.replace(/\/+$/, '');
         const url = `${baseUrl}/v1/room/${encodeURIComponent(opts.room)}`;
@@ -152,8 +158,8 @@ export class Client {
         const envelope = makeEnvelope(
             type,
             payload,
-            this.privateKey,
-            this.publicKey
+            this._privateKey,
+            this._publicKey
         );
         const promise = new Promise<ServerEvent>((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -176,19 +182,20 @@ export class Client {
         const envelope = makeEnvelope(
             'join',
             payload,
-            this.privateKey,
-            this.publicKey
+            this._privateKey,
+            this._publicKey
         );
         this.ws.send(JSON.stringify(envelope));
     }
 
-    send(body: string, topic = 'main') {
+    send(body: string, topic = 'main', options?: { cap?: Cap }) {
         const payload: SendPayload = { topic, body };
+        if (options?.cap) payload.cap_proof = options.cap;
         const envelope = makeEnvelope(
             'send',
             payload,
-            this.privateKey,
-            this.publicKey
+            this._privateKey,
+            this._publicKey
         );
         this.ws.send(JSON.stringify(envelope));
     }
@@ -212,8 +219,9 @@ export class Client {
         return result.topic;
     }
 
-    async subscribe(topic: string): Promise<void> {
+    async subscribe(topic: string, options?: { cap?: Cap }): Promise<void> {
         const payload: SubscribePayload = { topic };
+        if (options?.cap) payload.proof = options.cap;
         const result = await this.request<SubscribeResult>(
             'subscribe',
             payload
@@ -248,8 +256,8 @@ export class Client {
             const envelope = makeEnvelope<LeavePayload>(
                 'leave',
                 {},
-                this.privateKey,
-                this.publicKey
+                this._privateKey,
+                this._publicKey
             );
             this.ws.send(JSON.stringify(envelope));
         }
@@ -257,6 +265,16 @@ export class Client {
     }
 
     get sessionPubkey(): string {
-        return toBase64Url(this.publicKey);
+        return toBase64Url(this._publicKey);
+    }
+
+    /** Raw public key bytes for issuing caps. */
+    get publicKey(): Uint8Array {
+        return this._publicKey;
+    }
+
+    /** Raw private key bytes for issuing and delegating caps. Handle with care. */
+    get privateKey(): Uint8Array {
+        return this._privateKey;
     }
 }
