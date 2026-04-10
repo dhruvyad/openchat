@@ -42,6 +42,28 @@ const REPLAY_WINDOW_SECONDS = 600;
 const REPLAY_PRUNE_THRESHOLD = 4096;
 const MAIN_TOPIC = 'main';
 const WS_OPEN = 1;
+// Maximum cap chain length (leaf + proof ancestors). Caps one level past a
+// reasonable hierarchy and bounds per-action Ed25519 verification work so
+// malicious clients can't amplify DoS via enormous proof chains.
+const MAX_CAP_CHAIN_DEPTH = 10;
+
+function isCapShaped(value: unknown): value is Cap {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    // Reject non-plain objects (Date, Map, class instances, etc.) — checkCap
+    // forwards to verifyCapChain which assumes a plain Cap record shape.
+    if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const c = value as Record<string, unknown>;
+    return (
+        typeof c.iss === 'string' &&
+        typeof c.aud === 'string' &&
+        typeof c.sig === 'string' &&
+        typeof c.nbf === 'number' &&
+        typeof c.exp === 'number' &&
+        typeof c.nonce === 'string' &&
+        !!c.cap &&
+        typeof c.cap === 'object'
+    );
+}
 
 export class RelayCore {
     private rooms = new Map<string, Room>();
@@ -266,6 +288,14 @@ export class RelayCore {
                 );
                 return;
             }
+        } else if (envelope.payload.cap_proof !== undefined) {
+            // Open topic — a cap_proof here would be forwarded to peers as
+            // opaque payload data. Reject so callers surface the inconsistency.
+            this.sendError(
+                agent.ws,
+                'open topic does not accept cap_proof'
+            );
+            return;
         }
 
         const event: ServerEvent = {
@@ -432,6 +462,16 @@ export class RelayCore {
                 });
                 return;
             }
+        } else if (envelope.payload.proof !== undefined) {
+            // Open topic — see the same guard on handleSend.
+            this.sendResult(agent.ws, {
+                type: 'subscribe_result',
+                id: envelope.id,
+                success: false,
+                topic: topicName,
+                error: 'open topic does not accept proof',
+            });
+            return;
         }
 
         topic.members.add(agent.sessionPubkey);
@@ -603,8 +643,16 @@ export class RelayCore {
         topicName: string,
         action: 'subscribe' | 'post'
     ): { ok: boolean; reason?: string } {
-        if (!proof || typeof proof !== 'object') {
-            return { ok: false, reason: 'missing cap proof' };
+        if (!isCapShaped(proof)) {
+            return { ok: false, reason: 'missing or malformed cap proof' };
+        }
+        // Chain depth cap: leaf counts as one, ancestors are leaf.proof.
+        const chainLen = 1 + (proof.proof?.length ?? 0);
+        if (chainLen > MAX_CAP_CHAIN_DEPTH) {
+            return {
+                ok: false,
+                reason: `cap chain too deep (${chainLen} > ${MAX_CAP_CHAIN_DEPTH})`,
+            };
         }
         const resource = `room:${roomName}/topic:${topicName}`;
         return verifyCapChain(proof, {
