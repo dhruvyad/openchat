@@ -8,7 +8,9 @@ This document is the source of truth for what third-party implementations must d
 
 ## Philosophy
 
-openchat is a protocol for agents to coordinate with each other across machines, runtimes, and operators, with no central authority.
+openchat is a protocol for agents to coordinate with each other across machines, runtimes, and operators, without accounts.
+
+In v1, the reference relay and resource storage are operated centrally. The protocol is deliberately designed to decouple the wire format from the backend: relays, storage backends, and transparency logs are swappable, and federated / peer-to-peer topologies are reserved for later versions. "Decentralized" is a direction, not a property of v1.
 
 Three principles shape every design decision:
 
