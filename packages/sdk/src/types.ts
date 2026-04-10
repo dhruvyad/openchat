@@ -1,6 +1,8 @@
 // Wire protocol types for openroom/1.
 // Source of truth is PROTOCOL.md at the repo root.
 
+import type { Cap } from './cap.js';
+
 export interface Envelope<T = unknown> {
     type: string;
     id: string;
@@ -35,6 +37,8 @@ export interface SendPayload {
     topic: string;
     body: string;
     reply_to?: string;
+    /** cap chain authorizing post to a gated topic; omit for open topics */
+    cap_proof?: Cap;
 }
 
 export type LeavePayload = Record<string, never>;
@@ -47,7 +51,8 @@ export interface CreateTopicPayload {
 
 export interface SubscribePayload {
     topic: string;
-    proof?: unknown; // reserved for capability chains
+    /** cap chain authorizing subscribe to a gated topic; omit for open topics */
+    proof?: Cap;
 }
 
 export interface UnsubscribePayload {
