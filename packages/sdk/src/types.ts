@@ -65,6 +65,50 @@ export interface UnsubscribePayload {
 
 export type ListTopicsPayload = Record<string, never>;
 
+export interface ResourceSummary {
+    /** content hash identifier, `blake3:<hex>` */
+    cid: string;
+    /** name slot this resource occupies in the room's namespace */
+    name: string;
+    /** free-form type tag; well-known: room-spec, file, blob */
+    kind: string;
+    mime: string;
+    size: number;
+    created_by: string;
+    created_at: number;
+    /** optional cap root required for future writes at this name */
+    validation_hook: string | null;
+}
+
+export interface ResourcePutPayload {
+    name: string;
+    kind: string;
+    mime?: string;
+    /** base64url-encoded content, limited to 1 MiB inline */
+    content: string;
+    /** cap root pubkey (base64url) required for future writes; null = open */
+    validation_hook?: string | null;
+    /** cap proof if the existing resource at `name` has a validation_hook set */
+    cap_proof?: Cap;
+}
+
+export interface ResourceGetPayload {
+    name?: string;
+    cid?: string;
+}
+
+export interface ResourceListPayload {
+    kind?: string;
+}
+
+export interface ResourceSubscribePayload {
+    name: string;
+}
+
+export interface ResourceUnsubscribePayload {
+    name: string;
+}
+
 // ----- relay → client events -----
 
 export interface ChallengeEvent {
@@ -78,6 +122,7 @@ export interface JoinedEvent {
     you: string;
     agents: AgentSummary[];
     topics: TopicSummary[];
+    resources: ResourceSummary[];
     server_time: number;
 }
 
@@ -97,6 +142,13 @@ export interface TopicChangedEvent {
     topic: string;
     change: 'created' | 'deleted';
     summary?: TopicSummary;
+}
+
+export interface ResourceChangedEvent {
+    type: 'resource_changed';
+    name: string;
+    change: 'put' | 'deleted';
+    summary?: ResourceSummary;
 }
 
 export interface CreateTopicResult {
@@ -136,6 +188,46 @@ export interface ListTopicsResult {
     topics: TopicSummary[];
 }
 
+export interface ResourcePutResult {
+    type: 'resource_put_result';
+    id: string;
+    success: boolean;
+    summary?: ResourceSummary;
+    error?: string;
+}
+
+export interface ResourceGetResult {
+    type: 'resource_get_result';
+    id: string;
+    success: boolean;
+    /** base64url-encoded content if found */
+    content?: string;
+    summary?: ResourceSummary;
+    error?: string;
+}
+
+export interface ResourceListResult {
+    type: 'resource_list_result';
+    id: string;
+    resources: ResourceSummary[];
+}
+
+export interface ResourceSubscribeResult {
+    type: 'resource_subscribe_result';
+    id: string;
+    success: boolean;
+    name: string;
+    error?: string;
+}
+
+export interface ResourceUnsubscribeResult {
+    type: 'resource_unsubscribe_result';
+    id: string;
+    success: boolean;
+    name: string;
+    error?: string;
+}
+
 export interface ErrorEvent {
     type: 'error';
     reason: string;
@@ -148,9 +240,15 @@ export type ServerEvent =
     | AgentsChangedEvent
     | MessageEvent
     | TopicChangedEvent
+    | ResourceChangedEvent
     | CreateTopicResult
     | SendResult
     | SubscribeResult
     | UnsubscribeResult
     | ListTopicsResult
+    | ResourcePutResult
+    | ResourceGetResult
+    | ResourceListResult
+    | ResourceSubscribeResult
+    | ResourceUnsubscribeResult
     | ErrorEvent;

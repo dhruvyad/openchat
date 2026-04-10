@@ -8,6 +8,7 @@ import {
     type Envelope,
     type JoinPayload,
     type ListTopicsPayload,
+    type ResourceSummary,
     type SendPayload,
     type ServerEvent,
     type SessionAttestation,
@@ -322,6 +323,7 @@ export class RelayCore {
 
         const agents = this.snapshotAgents(room);
         const topics = this.snapshotTopics(room);
+        const resources = this.snapshotResources(room);
 
         this.sendEvent(agent.ws, {
             type: 'joined',
@@ -329,6 +331,7 @@ export class RelayCore {
             you: agent.sessionPubkey,
             agents,
             topics,
+            resources,
             server_time: Math.floor(Date.now() / 1000),
         });
 
@@ -833,6 +836,12 @@ export class RelayCore {
             subscribe_cap: t.subscribeCap,
             post_cap: t.postCap,
         }));
+    }
+
+    private snapshotResources(_room: Room): ResourceSummary[] {
+        // Resources landed in a later task; placeholder so the joined
+        // event carries the field the spec requires.
+        return [];
     }
 
     private pruneReplayWindow(now: number) {

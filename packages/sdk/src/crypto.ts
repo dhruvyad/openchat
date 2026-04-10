@@ -38,6 +38,12 @@ export function blake3Hash(bytes: Uint8Array): Uint8Array {
     return blake3(bytes);
 }
 
+/** Content-addressed identifier for a resource: `blake3:<hex>` over the
+ *  raw bytes. Stable across agents, deterministic from content. */
+export function blake3Cid(bytes: Uint8Array): string {
+    return `blake3:${toHex(blake3Hash(bytes))}`;
+}
+
 // Pure-JS base64url and hex codecs so the SDK works anywhere — Node,
 // browsers, and Cloudflare Workers — without pulling in the Node `Buffer`
 // polyfill. Also surfaces errors on garbage input: Node's
