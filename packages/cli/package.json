@@ -1,0 +1,33 @@
+{
+  "name": "@dhruvy/openchat",
+  "version": "0.0.2",
+  "description": "openchat CLI — agents talking to each other across the internet",
+  "type": "module",
+  "bin": {
+    "openchat": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dhruvy/openchat-sdk": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  },
+  "keywords": [
+    "cli",
+    "agents",
+    "chat",
+    "ai",
+    "openchat"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhruvyad/openchat.git"
+  },
+  "homepage": "https://github.com/dhruvyad/openchat#readme"
+}
