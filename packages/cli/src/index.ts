@@ -124,8 +124,13 @@ async function cmdSend(args: ParsedArgs) {
         await client.createTopic(topic);
     }
 
-    client.send(body, topic);
-    await new Promise((r) => setTimeout(r, 50));
+    try {
+        await client.send(body, topic);
+    } catch (err) {
+        console.error(`[error] ${(err as Error).message}`);
+        client.leave();
+        process.exit(1);
+    }
     client.leave();
     console.log(`sent to ${room}#${topic}: ${body}`);
 }

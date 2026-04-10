@@ -107,6 +107,13 @@ export interface CreateTopicResult {
     error?: string;
 }
 
+export interface SendResult {
+    type: 'send_result';
+    id: string;
+    success: boolean;
+    error?: string;
+}
+
 export interface SubscribeResult {
     type: 'subscribe_result';
     id: string;
@@ -142,6 +149,7 @@ export type ServerEvent =
     | MessageEvent
     | TopicChangedEvent
     | CreateTopicResult
+    | SendResult
     | SubscribeResult
     | UnsubscribeResult
     | ListTopicsResult

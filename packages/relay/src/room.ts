@@ -313,17 +313,29 @@ export class RelayCore {
         roomName: string,
         envelope: Envelope<SendPayload>
     ) {
+        const sendFail = (error: string) => {
+            this.sendResult(agent.ws, {
+                type: 'send_result',
+                id: envelope.id,
+                success: false,
+                error,
+            });
+        };
+
         if (!agent.joined) {
-            this.sendError(agent.ws, 'not joined');
+            sendFail('not joined');
             return;
         }
         const room = this.rooms.get(roomName);
-        if (!room) return;
+        if (!room) {
+            sendFail('unknown room');
+            return;
+        }
 
         const topicName = envelope.payload.topic;
         const topic = room.topics.get(topicName);
         if (!topic) {
-            this.sendError(agent.ws, `unknown topic: ${topicName}`);
+            sendFail(`unknown topic: ${topicName}`);
             return;
         }
 
@@ -337,8 +349,7 @@ export class RelayCore {
                 'post'
             );
             if (!check.ok) {
-                this.sendError(
-                    agent.ws,
+                sendFail(
                     `post denied: ${check.reason ?? 'no valid cap'}`
                 );
                 return;
@@ -346,10 +357,7 @@ export class RelayCore {
         } else if (envelope.payload.cap_proof !== undefined) {
             // Open topic — a cap_proof here would be forwarded to peers as
             // opaque payload data. Reject so callers surface the inconsistency.
-            this.sendError(
-                agent.ws,
-                'open topic does not accept cap_proof'
-            );
+            sendFail('open topic does not accept cap_proof');
             return;
         }
 
@@ -359,6 +367,14 @@ export class RelayCore {
             envelope,
         };
         this.broadcastToTopic(room, topic, event);
+
+        // Ack the send so the caller can correlate success to a specific
+        // envelope id instead of inferring from the absence of an error.
+        this.sendResult(agent.ws, {
+            type: 'send_result',
+            id: envelope.id,
+            success: true,
+        });
     }
 
     private handleCreateTopic(

@@ -114,8 +114,10 @@ async function run() {
     await trusted1.connect();
 
     // Session #1 post: trusted uses the delegated cap.
-    trusted1.send('pre-reconnect-message', 'decisions', { cap: trustedPostCap });
-    await sleep(250);
+    await trusted1.send('pre-reconnect-message', 'decisions', {
+        cap: trustedPostCap,
+    });
+    await sleep(150);
 
     const sess1Got = masterInbox1.some(
         (m) => m.topic === 'decisions' && m.body === 'pre-reconnect-message'
@@ -161,10 +163,10 @@ async function run() {
     //   - Cap's aud is trusted's identity key (unchanged)
     //   - Trusted's session #2 is bound to that identity via attestation
     //   - Cap's nbf..exp window is still open
-    trusted2.send('post-reconnect-message', 'decisions', {
+    await trusted2.send('post-reconnect-message', 'decisions', {
         cap: trustedPostCap,
     });
-    await sleep(250);
+    await sleep(150);
 
     const sess2Got = masterInbox2.some(
         (m) => m.topic === 'decisions' && m.body === 'post-reconnect-message'

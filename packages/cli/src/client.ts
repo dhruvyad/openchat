@@ -15,6 +15,7 @@ import {
     type ListTopicsResult,
     type MessageEvent,
     type SendPayload,
+    type SendResult,
     type ServerEvent,
     type SessionAttestation,
     type SubscribePayload,
@@ -111,6 +112,7 @@ export class Client {
         // Correlate RPC results to pending requests.
         if (
             event.type === 'create_topic_result' ||
+            event.type === 'send_result' ||
             event.type === 'subscribe_result' ||
             event.type === 'unsubscribe_result' ||
             event.type === 'list_topics_result'
@@ -203,16 +205,17 @@ export class Client {
         this.ws.send(JSON.stringify(envelope));
     }
 
-    send(body: string, topic = 'main', options?: { cap?: Cap }) {
+    async send(
+        body: string,
+        topic = 'main',
+        options?: { cap?: Cap }
+    ): Promise<void> {
         const payload: SendPayload = { topic, body };
         if (options?.cap) payload.cap_proof = options.cap;
-        const envelope = makeEnvelope(
-            'send',
-            payload,
-            this._privateKey,
-            this._publicKey
-        );
-        this.ws.send(JSON.stringify(envelope));
+        const result = await this.request<SendResult>('send', payload);
+        if (!result.success) {
+            throw new Error(result.error ?? 'send failed');
+        }
     }
 
     async createTopic(

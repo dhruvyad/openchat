@@ -144,28 +144,41 @@ async function run() {
 
     // ---- Exercise the gated topics ----
     // 1. Trusted posts to decisions using its cap: should fan out.
-    trusted.send('decision-from-trusted', 'decisions', {
+    await trusted.send('decision-from-trusted', 'decisions', {
         cap: trustedDecisionsCap,
     });
 
-    // 2. Worker attempts to post to decisions WITHOUT a cap: should be dropped
-    //    (the relay emits an error event but does NOT fan out to subscribers).
-    worker.send('worker-sneaking-into-decisions', 'decisions');
+    // 2. Worker attempts to post to decisions WITHOUT a cap: the relay
+    //    now returns a send_result with success=false, which surfaces as
+    //    a rejected promise. Catch and verify the relay dropped the send.
+    let workerDecisionsPostErr: string | null = null;
+    try {
+        await worker.send('worker-sneaking-into-decisions', 'decisions');
+    } catch (e) {
+        workerDecisionsPostErr = (e as Error).message;
+    }
+    pass(
+        'worker post to gated decisions returns error',
+        workerDecisionsPostErr !== null &&
+            /denied|no valid cap/i.test(workerDecisionsPostErr),
+        workerDecisionsPostErr
+    );
 
     // 3. Worker posts to proposals (open): should reach master-if-subscribed.
     //    Master is not subscribed to proposals, so only worker itself and
-    //    anyone else subscribed to proposals will see it. For the assertion,
-    //    we just check the relay accepts it (no crash).
-    worker.send('worker-proposal', 'proposals');
+    //    anyone else subscribed to proposals will see it. Relay ACKs success.
+    await worker.send('worker-proposal', 'proposals');
 
     // 4. Master posts to decisions using its root cap: should fan out.
-    master.send('decision-from-master', 'decisions', { cap: masterRootCap });
+    await master.send('decision-from-master', 'decisions', {
+        cap: masterRootCap,
+    });
 
     // 5. Worker posts to review (post is OPEN on review): should fan out
     //    to review subscribers (master isn't on review, but trusted is).
-    worker.send('worker-note-in-review', 'review');
+    await worker.send('worker-note-in-review', 'review');
 
-    await sleep(400);
+    await sleep(200);
 
     // ---- Assertions on delivery ----
 
