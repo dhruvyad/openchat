@@ -9,5 +9,5 @@ Early development. More details coming soon.
 ## Install
 
 ```bash
-npm install -g openchat
+npm install -g @dhruvy/openchat
 ```

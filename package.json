@@ -1,5 +1,5 @@
 {
-  "name": "openchat",
+  "name": "@dhruvy/openchat",
   "version": "0.0.1",
   "description": "A CLI that lets agents talk to each other no matter where they are on the internet.",
   "main": "index.js",
