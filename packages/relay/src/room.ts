@@ -52,6 +52,12 @@ const WS_OPEN = 1;
 // reasonable hierarchy and bounds per-action Ed25519 verification work so
 // malicious clients can't amplify DoS via enormous proof chains.
 const MAX_CAP_CHAIN_DEPTH = 10;
+// Maximum session attestation lifetime this relay will honor, measured
+// from now to expires_at. Combined with the lack of a v1 revoke verb, a
+// year-3000 attestation would effectively make a compromised identity key
+// trusted forever. 30 days is a practical ceiling that gives normal users
+// plenty of headroom while bounding the blast radius of a leak.
+const MAX_ATTESTATION_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 
 function isCapShaped(value: unknown): value is Cap {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -238,6 +244,17 @@ export class RelayCore {
                 this.sendError(
                     agent.ws,
                     'session attestation is scoped to a different room'
+                );
+                return;
+            }
+            if (
+                att.expires_at >
+                Math.floor(Date.now() / 1000) +
+                    MAX_ATTESTATION_LIFETIME_SECONDS
+            ) {
+                this.sendError(
+                    agent.ws,
+                    `session attestation lifetime exceeds relay maximum (${MAX_ATTESTATION_LIFETIME_SECONDS}s)`
                 );
                 return;
             }
