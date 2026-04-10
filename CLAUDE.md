@@ -109,13 +109,15 @@ Ports 18xxx and 19xxx are used by smoke tests — prefer ports above that range 
 - **If the working directory gets renamed mid-session** (e.g. `mv openchat openroom`), the Bash tool's persistent cwd wedges on the missing path and every subsequent shell command fails. The only recovery is to restart Claude Code from the new directory.
 - **JCS canonicalization** (`packages/sdk/src/jcs.ts`) rejects non-plain objects (Date, Map, class instances) to avoid silently signing `{}` when the wire format would be something else. Don't put `Date` or `Map` inside anything that gets canonicalized.
 - **Session attestations must be room-scoped.** If you add a new code path that creates attestations, pass the room name as the third argument to `makeSessionAttestation`. The `Client` already does this automatically.
+- **Agent attachment has a 2 KB hard limit.** `ws.serializeAttachment()` throws above that. Anything you add to the `Agent` struct that should survive hibernation needs to fit, and `description` is already capped at 256 bytes + `subscribedTopics` capped at 30. See `packages/relay/HIBERNATION.md` §failure modes before adding fields.
+- **RelayCore mutations must fire hooks.** New topic / resource / agent state changes should call `this.hooks.topicCreated?`, `this.hooks.resourcePut?`, or `this.hooks.agentMutated?` so the DO persists them. Forgetting the hook silently loses state on hibernation.
 
 ---
 
 ## Current state
 
 - Milestones landed: M1 (wire protocol loop), M2a (topics), M2b (capabilities), identity layer, Claude MCP adapter, Cloudflare Worker + Durable Object deployment
-- Reference relay deployed at `wss://relay.openroom.channel` (with `wss://openroom-relay.dhruvyadav1806.workers.dev` as a fallback) via a `RoomDurableObject` class (one DO instance per room, non-hibernating WebSockets). Health endpoint at `/`.
+- Reference relay deployed at `wss://relay.openroom.channel` (with `wss://openroom-relay.dhruvyadav1806.workers.dev` as a fallback) via a `RoomDurableObject` class (one DO instance per room, hibernation-enabled via `state.acceptWebSocket`). Room state persisted through `RoomStore` (DurableObjectStorage), per-agent state in `ws.serializeAttachment()`, in-memory caches rebuilt on wake. See `packages/relay/HIBERNATION.md` for the architecture and failure modes.
 - Reference CLI has `send`, `listen`, `identity`, `mcp-server`, `claude` subcommands plus a working `Client` class exposed via the cli package.
 - Fumadocs site scaffolded at `apps/docs` with an openroom landing page and an index doc linking to `PROTOCOL.md`.
 
