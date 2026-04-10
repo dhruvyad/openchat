@@ -125,6 +125,16 @@ export interface AnnouncePayload {
     description: string;
     /** unix seconds; the directory expires the announcement at this time */
     expires_at: number;
+    /**
+     * Optional session attestation binding the announcing session key to a
+     * long-lived identity key AND to the room being announced. When present,
+     * the directory records the identity pubkey alongside the announcement
+     * so viewers can see who published it. The attestation must:
+     * - have `session_pubkey` equal to the envelope's `from`
+     * - have `room` equal to the payload's `room`
+     * - be unexpired and signed by the identity key
+     */
+    identity_attestation?: SessionAttestation;
     /** reserved for future cap-gated policy modes; ignored in v1 open/authority modes */
     cap_proof?: Cap;
 }
