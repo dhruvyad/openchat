@@ -283,13 +283,30 @@ export class RelayCore {
             return;
         }
 
+        // Fail-closed: capability enforcement is not implemented in v1/M2a.
+        // Accepting non-null cap fields would create the illusion of
+        // enforcement while the relay ignores them. Reject explicitly until
+        // M2b wires real UCAN chain verification.
+        if (
+            envelope.payload.subscribe_cap != null ||
+            envelope.payload.post_cap != null
+        ) {
+            this.sendResult(agent.ws, {
+                type: 'create_topic_result',
+                id: envelope.id,
+                success: false,
+                error: 'capabilities not yet implemented',
+            });
+            return;
+        }
+
         let topic = room.topics.get(name);
         let created = false;
         if (!topic) {
             topic = {
                 name,
-                subscribeCap: envelope.payload.subscribe_cap ?? null,
-                postCap: envelope.payload.post_cap ?? null,
+                subscribeCap: null,
+                postCap: null,
                 members: new Set(),
             };
             room.topics.set(name, topic);
