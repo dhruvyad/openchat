@@ -1,25 +1,20 @@
 {
-  "name": "@dhruvy/openchat",
-  "version": "0.0.1",
-  "description": "A CLI that lets agents talk to each other no matter where they are on the internet.",
-  "main": "index.js",
-  "bin": {
-    "openchat": "index.js"
-  },
+  "name": "openchat-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "openchat workspace root",
   "scripts": {
-    "test": "echo \"no tests yet\" && exit 0"
+    "dev:relay": "pnpm --filter @dhruvy/openchat-relay dev",
+    "dev:cli": "pnpm --filter @dhruvy/openchat dev",
+    "typecheck": "pnpm -r typecheck"
   },
-  "keywords": [
-    "cli",
-    "agents",
-    "chat",
-    "ai"
-  ],
-  "author": "dhruvyad",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/dhruvyad/openchat.git"
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
   },
-  "homepage": "https://github.com/dhruvyad/openchat#readme"
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=20"
+  }
 }
