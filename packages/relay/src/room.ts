@@ -49,6 +49,9 @@ interface Agent {
     identityPubkey?: string;
     /** the raw attestation, forwarded to peers as-is so they can verify locally */
     identityAttestation?: SessionAttestation;
+    /** token bucket for per-connection rate limiting */
+    rateTokens: number;
+    rateLastRefillMs: number;
 }
 
 interface Topic {
@@ -89,6 +92,19 @@ const WS_OPEN = 1;
 const MAX_RESOURCE_CONTENT_BYTES = 1024 * 1024;
 /** Max length of a resource name slot (bytes). */
 const MAX_RESOURCE_NAME_BYTES = 256;
+
+// Memory bounds per room. Rough ceilings that prevent a single room from
+// consuming unbounded relay memory under abuse. Generous for real usage.
+const MAX_AGENTS_PER_ROOM = 500;
+const MAX_TOPICS_PER_ROOM = 100;
+const MAX_RESOURCES_PER_ROOM = 500;
+const MAX_TOTAL_RESOURCE_BYTES_PER_ROOM = 32 * 1024 * 1024;
+
+// Per-connection rate limit (token bucket). Well-behaved clients stay
+// well under these; abusers hit them quickly and get error responses
+// until they back off.
+const RATE_LIMIT_BURST = 100;
+const RATE_LIMIT_SUSTAINED_PER_SEC = 20;
 // Maximum cap chain length (leaf + proof ancestors). Caps one level past a
 // reasonable hierarchy and bounds per-action Ed25519 verification work so
 // malicious clients can't amplify DoS via enormous proof chains.
@@ -168,6 +184,8 @@ export class RelayCore {
             sessionPubkey: '',
             joined: false,
             challengeNonce,
+            rateTokens: RATE_LIMIT_BURST,
+            rateLastRefillMs: Date.now(),
         };
         this.connections.set(ws, agent);
         this.sendEvent(ws, { type: 'challenge', nonce: challengeNonce });
@@ -195,6 +213,14 @@ export class RelayCore {
     }
 
     private handleMessage(agent: Agent, roomName: string, raw: string) {
+        // Rate limit BEFORE anything else — including JSON parse and
+        // signature verification. A flood of junk envelopes should not
+        // force the relay to burn CPU on parsing.
+        if (!this.consumeRateLimit(agent, Date.now())) {
+            this.sendError(agent.ws, 'rate limit exceeded');
+            return;
+        }
+
         let envelope: Envelope;
         try {
             envelope = JSON.parse(raw) as Envelope;
@@ -386,12 +412,23 @@ export class RelayCore {
             agent.identityAttestation = att;
         }
 
+        const room = this.ensureRoom(roomName);
+        // Agent count cap. Existing session-key takeover doesn't count
+        // as a new agent (we evict the old one), so check before the
+        // takeover branch.
+        if (
+            !room.agents.has(envelope.from) &&
+            room.agents.size >= MAX_AGENTS_PER_ROOM
+        ) {
+            this.sendError(agent.ws, 'room agent limit reached');
+            return;
+        }
+
         agent.sessionPubkey = envelope.from;
         agent.displayName = envelope.payload.display_name;
         agent.description = envelope.payload.description;
         agent.joined = true;
 
-        const room = this.ensureRoom(roomName);
         const existing = room.agents.get(agent.sessionPubkey);
         if (existing && existing !== agent) {
             existing.ws.close();
@@ -550,6 +587,15 @@ export class RelayCore {
         let topic = room.topics.get(name);
         let created = false;
         if (!topic) {
+            if (room.topics.size >= MAX_TOPICS_PER_ROOM) {
+                this.sendResult(agent.ws, {
+                    type: 'create_topic_result',
+                    id: envelope.id,
+                    success: false,
+                    error: 'room topic limit reached',
+                });
+                return;
+            }
             topic = {
                 name,
                 subscribeCap,
@@ -847,6 +893,22 @@ export class RelayCore {
         this.sendEvent(ws, { type: 'error', reason });
     }
 
+    /** Token-bucket rate limiter. Refills lazily on each call. Returns
+     *  false if the agent has exhausted their bucket. */
+    private consumeRateLimit(agent: Agent, nowMs: number): boolean {
+        const elapsedSec = (nowMs - agent.rateLastRefillMs) / 1000;
+        if (elapsedSec > 0) {
+            agent.rateTokens = Math.min(
+                RATE_LIMIT_BURST,
+                agent.rateTokens + elapsedSec * RATE_LIMIT_SUSTAINED_PER_SEC
+            );
+            agent.rateLastRefillMs = nowMs;
+        }
+        if (agent.rateTokens < 1) return false;
+        agent.rateTokens -= 1;
+        return true;
+    }
+
     private checkCap(
         proof: Cap | undefined,
         agent: Agent,
@@ -978,6 +1040,22 @@ export class RelayCore {
         }
 
         const existing = room.resources.get(payload.name);
+        // Per-room resource count cap (only counts new inserts, not
+        // rewrites of an existing name).
+        if (
+            existing === undefined &&
+            room.resources.size >= MAX_RESOURCES_PER_ROOM
+        ) {
+            return fail('room resource count limit reached');
+        }
+        // Per-room total byte cap: sum of existing resource sizes plus
+        // the delta from this write.
+        let totalBytes = 0;
+        for (const r of room.resources.values()) totalBytes += r.size;
+        const delta = content.length - (existing?.size ?? 0);
+        if (totalBytes + delta > MAX_TOTAL_RESOURCE_BYTES_PER_ROOM) {
+            return fail('room resource byte limit reached');
+        }
         // If a prior resource declared a validation_hook, all future writes
         // at the same name must satisfy it. Without this, any agent could
         // overwrite a gated resource (e.g. rewrite room-spec) at will.
