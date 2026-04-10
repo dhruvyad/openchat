@@ -56,18 +56,28 @@ All of the above is spelled out in detail in `PROTOCOL.md`. When in doubt, that'
 pnpm install                                  # once
 pnpm -r exec tsc --noEmit                     # workspace-wide typecheck
 
-# All four smoke tests (run before every commit that touches protocol code):
+# All five smoke tests (run before every commit that touches protocol code):
 ./scripts/smoke-test.sh
 ./scripts/topic-smoke-test.sh
 ./scripts/cap-smoke-test.sh
 ./scripts/identity-smoke-test.sh
+./scripts/mcp-smoke-test.sh
 
-# Local dev loop:
-PORT=19000 pnpm --filter openroom-relay dev             # start a relay
+# Local dev loop (Node server):
+PORT=19000 pnpm --filter openroom-relay dev             # start a Node relay
 pnpm --filter openroom dev listen my-room               # listener
 pnpm --filter openroom dev send my-room "hi"            # sender
 pnpm --filter openroom dev identity                     # print/create identity
 pnpm --filter openroom dev listen my-room --no-identity # skip identity load
+pnpm --filter openroom dev claude my-room               # spawn claude with openroom MCP
+
+# Cloudflare Worker / Durable Object:
+pnpm --filter openroom-relay dev:worker   # wrangler dev (local Worker emulator)
+pnpm --filter openroom-relay deploy       # wrangler deploy (production push)
+
+# Point a client at the deployed relay:
+OPENROOM_RELAY=wss://openroom-relay.dhruvyadav1806.workers.dev \
+  pnpm --filter openroom dev listen my-room
 
 # Docs site:
 pnpm --filter openroom-docs dev                         # Fumadocs dev server
@@ -95,7 +105,7 @@ Ports 18xxx and 19xxx are used by smoke tests — prefer ports above that range 
 - **Fumadocs scaffolder** (`create-fumadocs-app`) uses a clack-based TUI that reads directly from the raw TTY per prompt. Piping `\n` or `\r` through stdin does not work. Use `expect` to drive it.
 - **Next.js + pnpm workspaces**: `turbopack.root` in `apps/docs/next.config.mjs` must be the monorepo root, not the app directory. Setting it to the app dir makes Next unable to resolve `next/package.json` because the real files live in the pnpm store above.
 - **`@noble/ed25519` v2** requires `sha512` to be injected at import time. Already wired in `packages/sdk/src/crypto.ts` via `ed.etc.sha512Sync = ...`. Don't remove it.
-- **`Buffer.from(s, 'base64url')` silently drops invalid characters** and returns a short buffer instead of throwing. `loadIdentity` compensates by validating key lengths are exactly 32 bytes.
+- **`Buffer.from(s, 'base64url')` silently drops invalid characters** and returns a short buffer instead of throwing. The SDK now uses a pure-JS base64url implementation in `packages/sdk/src/crypto.ts` that throws on invalid input AND works in Cloudflare Workers without the `Buffer` polyfill. `loadIdentity` additionally validates key lengths as a defense in depth.
 - **If the working directory gets renamed mid-session** (e.g. `mv openchat openroom`), the Bash tool's persistent cwd wedges on the missing path and every subsequent shell command fails. The only recovery is to restart Claude Code from the new directory.
 - **JCS canonicalization** (`packages/sdk/src/jcs.ts`) rejects non-plain objects (Date, Map, class instances) to avoid silently signing `{}` when the wire format would be something else. Don't put `Date` or `Map` inside anything that gets canonicalized.
 - **Session attestations must be room-scoped.** If you add a new code path that creates attestations, pass the room name as the third argument to `makeSessionAttestation`. The `Client` already does this automatically.
@@ -104,16 +114,18 @@ Ports 18xxx and 19xxx are used by smoke tests — prefer ports above that range 
 
 ## Current state
 
-- Milestones landed: M1 (wire protocol loop), M2a (topics), M2b (capabilities)
-- Identity keys + session attestations with room binding and 30-day lifetime cap
-- Fumadocs site scaffolded at `apps/docs` with an openroom landing page and an index doc linking to `PROTOCOL.md`
-- Reference CLI has `send`, `listen`, `identity` subcommands and a working `Client` class exposed via the cli package
+- Milestones landed: M1 (wire protocol loop), M2a (topics), M2b (capabilities), identity layer, Claude MCP adapter, Cloudflare Worker + Durable Object deployment
+- Reference relay deployed at `wss://openroom-relay.dhruvyadav1806.workers.dev` via a `RoomDurableObject` class (one DO instance per room, non-hibernating WebSockets). Health endpoint at `/`.
+- Reference CLI has `send`, `listen`, `identity`, `mcp-server`, `claude` subcommands plus a working `Client` class exposed via the cli package.
+- Fumadocs site scaffolded at `apps/docs` with an openroom landing page and an index doc linking to `PROTOCOL.md`.
 
 What's next (no commitment; these are the plausible directions):
 
-1. **Claude MCP adapter** — `openroom claude <room>` spawns Claude with the adapter registered as an MCP server. Highest leverage because it turns everything above into actual multi-agent use today.
-2. **Cloudflare Durable Object deployment** — port the Node WS relay to a DO at `relay.openroom.channel`. First real multi-machine usage.
-3. **Resource protocol** — content-addressed `room-spec`, `resource_put`/`get`/`list`/`subscribe`, validation hooks. Unblocks declarative room types and the proper fix for topic squatting.
+1. **Custom domain** for the deployed relay (`relay.openroom.channel`). Small task, just needs DNS + a Worker route.
+2. **Resource protocol** — content-addressed `room-spec`, `resource_put`/`get`/`list`/`subscribe`, validation hooks. Unblocks declarative room types and the proper fix for topic squatting.
+3. **Public viewer** at `openroom.channel` — read-only streaming of public rooms for humans.
+4. **Durable Object hibernation** — currently DOs stay warm while connections are open; hibernation would reduce costs significantly for idle rooms.
+5. **Transparency log / identity rotation / revocation** — the trust infrastructure milestone.
 
 ---
 
