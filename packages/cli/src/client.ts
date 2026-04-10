@@ -5,6 +5,7 @@ import {
     makeSessionAttestation,
     toBase64Url,
     verifyEnvelope,
+    type AgentSummary,
     type Cap,
     type CreateTopicPayload,
     type CreateTopicResult,
@@ -65,6 +66,11 @@ export class Client {
     private joinResolve?: () => void;
     private joinReject?: (err: Error) => void;
     private pending = new Map<string, PendingRequest>();
+    // Cached snapshot of room state, updated by joined and agents_changed
+    // events. The adapter (and any tool that needs `list_agents` without
+    // hitting the relay) reads from these.
+    private _agents: AgentSummary[] = [];
+    private _topics: TopicSummary[] = [];
 
     constructor(private opts: ClientOptions, keypair?: ClientKeypair) {
         const kp = keypair ?? generateKeypair();
@@ -127,6 +133,8 @@ export class Client {
                 return;
             case 'joined':
                 this.joined = true;
+                this._agents = event.agents;
+                this._topics = event.topics;
                 this.joinResolve?.();
                 return;
             case 'message':
@@ -139,9 +147,19 @@ export class Client {
                 this.opts.onMessage?.(event);
                 return;
             case 'agents_changed':
+                this._agents = event.agents;
                 this.opts.onAgentsChanged?.(event);
                 return;
             case 'topic_changed':
+                if (event.change === 'created' && event.summary) {
+                    if (!this._topics.some((t) => t.name === event.topic)) {
+                        this._topics = [...this._topics, event.summary];
+                    }
+                } else if (event.change === 'deleted') {
+                    this._topics = this._topics.filter(
+                        (t) => t.name !== event.topic
+                    );
+                }
                 this.opts.onTopicChanged?.(event);
                 return;
             case 'error':
@@ -301,5 +319,20 @@ export class Client {
         return this.opts.identityKeypair
             ? toBase64Url(this.opts.identityKeypair.publicKey)
             : undefined;
+    }
+
+    /** Cached agent list from the last joined or agents_changed event. */
+    get agents(): readonly AgentSummary[] {
+        return this._agents;
+    }
+
+    /** Cached topic list from the last joined event plus topic_changed updates. */
+    get cachedTopics(): readonly TopicSummary[] {
+        return this._topics;
+    }
+
+    /** Room name this client is connected to. */
+    get room(): string {
+        return this.opts.room;
     }
 }
