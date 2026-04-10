@@ -1,0 +1,24 @@
+{
+    "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+    "name": "openroom-relay",
+    "main": "src/worker.ts",
+    "compatibility_date": "2025-09-23",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "ROOM_DO",
+                "class_name": "RoomDurableObject"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": ["RoomDurableObject"]
+        }
+    ],
+    "observability": {
+        "enabled": true
+    }
+}

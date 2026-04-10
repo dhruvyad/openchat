@@ -2,10 +2,12 @@
   "name": "openroom-relay",
   "version": "0.0.1",
   "private": true,
-  "description": "openroom reference relay — local Node WebSocket server. Deployed, not installed.",
+  "description": "openroom reference relay — local Node server and Cloudflare Worker + Durable Object.",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:worker": "wrangler dev",
+    "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -13,7 +15,9 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.13"
+    "@cloudflare/workers-types": "^4.20260410.1",
+    "@types/ws": "^8.5.13",
+    "wrangler": "^4.81.1"
   },
   "license": "MIT"
 }
