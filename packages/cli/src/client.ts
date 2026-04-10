@@ -15,6 +15,18 @@ import {
     type ListTopicsPayload,
     type ListTopicsResult,
     type MessageEvent,
+    type ResourceChangedEvent,
+    type ResourceGetPayload,
+    type ResourceGetResult,
+    type ResourceListPayload,
+    type ResourceListResult,
+    type ResourcePutPayload,
+    type ResourcePutResult,
+    type ResourceSubscribePayload,
+    type ResourceSubscribeResult,
+    type ResourceSummary,
+    type ResourceUnsubscribePayload,
+    type ResourceUnsubscribeResult,
     type SendPayload,
     type SendResult,
     type ServerEvent,
@@ -42,6 +54,7 @@ export interface ClientOptions {
         event: Extract<ServerEvent, { type: 'agents_changed' }>
     ) => void;
     onTopicChanged?: (event: TopicChangedEvent) => void;
+    onResourceChanged?: (event: ResourceChangedEvent) => void;
     onError?: (reason: string) => void;
 }
 
@@ -66,11 +79,12 @@ export class Client {
     private joinResolve?: () => void;
     private joinReject?: (err: Error) => void;
     private pending = new Map<string, PendingRequest>();
-    // Cached snapshot of room state, updated by joined and agents_changed
-    // events. The adapter (and any tool that needs `list_agents` without
-    // hitting the relay) reads from these.
+    // Cached snapshot of room state, updated by joined / agents_changed /
+    // topic_changed / resource_changed events. The adapter (and any tool
+    // that wants a read without hitting the relay) reads from these.
     private _agents: AgentSummary[] = [];
     private _topics: TopicSummary[] = [];
+    private _resources: ResourceSummary[] = [];
 
     constructor(private opts: ClientOptions, keypair?: ClientKeypair) {
         const kp = keypair ?? generateKeypair();
@@ -121,7 +135,12 @@ export class Client {
             event.type === 'send_result' ||
             event.type === 'subscribe_result' ||
             event.type === 'unsubscribe_result' ||
-            event.type === 'list_topics_result'
+            event.type === 'list_topics_result' ||
+            event.type === 'resource_put_result' ||
+            event.type === 'resource_get_result' ||
+            event.type === 'resource_list_result' ||
+            event.type === 'resource_subscribe_result' ||
+            event.type === 'resource_unsubscribe_result'
         ) {
             this.resolvePending(event.id, event);
             return;
@@ -135,6 +154,7 @@ export class Client {
                 this.joined = true;
                 this._agents = event.agents;
                 this._topics = event.topics;
+                this._resources = event.resources ?? [];
                 this.joinResolve?.();
                 return;
             case 'message':
@@ -161,6 +181,25 @@ export class Client {
                     );
                 }
                 this.opts.onTopicChanged?.(event);
+                return;
+            case 'resource_changed':
+                if (event.change === 'put' && event.summary) {
+                    const idx = this._resources.findIndex(
+                        (r) => r.name === event.name
+                    );
+                    if (idx === -1) {
+                        this._resources = [...this._resources, event.summary];
+                    } else {
+                        this._resources = this._resources.map((r, i) =>
+                            i === idx ? event.summary! : r
+                        );
+                    }
+                } else if (event.change === 'deleted') {
+                    this._resources = this._resources.filter(
+                        (r) => r.name !== event.name
+                    );
+                }
+                this.opts.onResourceChanged?.(event);
                 return;
             case 'error':
                 this.opts.onError?.(event.reason);
@@ -287,6 +326,97 @@ export class Client {
         return result.topics;
     }
 
+    async putResource(
+        name: string,
+        content: Uint8Array | string,
+        options?: {
+            kind?: string;
+            mime?: string;
+            validationHook?: string | null;
+            cap?: Cap;
+        }
+    ): Promise<ResourceSummary> {
+        const bytes =
+            typeof content === 'string'
+                ? new TextEncoder().encode(content)
+                : content;
+        const payload: ResourcePutPayload = {
+            name,
+            kind: options?.kind ?? 'blob',
+            mime: options?.mime,
+            content: toBase64Url(bytes),
+            validation_hook: options?.validationHook ?? null,
+        };
+        if (options?.cap) payload.cap_proof = options.cap;
+        const result = await this.request<ResourcePutResult>(
+            'resource_put',
+            payload
+        );
+        if (!result.success || !result.summary) {
+            throw new Error(result.error ?? 'resource_put failed');
+        }
+        return result.summary;
+    }
+
+    async getResource(
+        nameOrCid: { name: string } | { cid: string }
+    ): Promise<{ summary: ResourceSummary; content: Uint8Array }> {
+        const payload: ResourceGetPayload = {};
+        if ('name' in nameOrCid) payload.name = nameOrCid.name;
+        else payload.cid = nameOrCid.cid;
+        const result = await this.request<ResourceGetResult>(
+            'resource_get',
+            payload
+        );
+        if (!result.success || !result.summary || !result.content) {
+            throw new Error(result.error ?? 'resource_get failed');
+        }
+        // Verify CID matches the received content — the relay's CID was
+        // computed from the stored bytes, but a compromised relay could
+        // lie. Re-deriving locally catches that.
+        const { fromBase64Url, blake3Cid } = await import('openroom-sdk');
+        const bytes = fromBase64Url(result.content);
+        const derived = blake3Cid(bytes);
+        if (derived !== result.summary.cid) {
+            throw new Error(
+                `resource content hash mismatch: ${derived} vs ${result.summary.cid}`
+            );
+        }
+        return { summary: result.summary, content: bytes };
+    }
+
+    async listResources(kind?: string): Promise<ResourceSummary[]> {
+        const payload: ResourceListPayload = {};
+        if (kind) payload.kind = kind;
+        const result = await this.request<ResourceListResult>(
+            'resource_list',
+            payload
+        );
+        return result.resources;
+    }
+
+    async subscribeResource(name: string): Promise<void> {
+        const payload: ResourceSubscribePayload = { name };
+        const result = await this.request<ResourceSubscribeResult>(
+            'resource_subscribe',
+            payload
+        );
+        if (!result.success) {
+            throw new Error(result.error ?? 'resource_subscribe failed');
+        }
+    }
+
+    async unsubscribeResource(name: string): Promise<void> {
+        const payload: ResourceUnsubscribePayload = { name };
+        const result = await this.request<ResourceUnsubscribeResult>(
+            'resource_unsubscribe',
+            payload
+        );
+        if (!result.success) {
+            throw new Error(result.error ?? 'resource_unsubscribe failed');
+        }
+    }
+
     leave() {
         if (this.ws.readyState === WebSocket.OPEN) {
             const envelope = makeEnvelope<LeavePayload>(
@@ -329,6 +459,11 @@ export class Client {
     /** Cached topic list from the last joined event plus topic_changed updates. */
     get cachedTopics(): readonly TopicSummary[] {
         return this._topics;
+    }
+
+    /** Cached resource summaries, updated by joined + resource_changed events. */
+    get cachedResources(): readonly ResourceSummary[] {
+        return this._resources;
     }
 
     /** Room name this client is connected to. */
