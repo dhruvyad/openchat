@@ -33,16 +33,21 @@ interface Room {
     name: string;
     agents: Map<string, Agent>;
     topics: Map<string, Topic>;
-    recentIds: Map<string, number>;
 }
 
 const TIMESTAMP_DRIFT_SECONDS = 300;
 const REPLAY_WINDOW_SECONDS = 600;
+const REPLAY_PRUNE_THRESHOLD = 4096;
 const MAIN_TOPIC = 'main';
 const WS_OPEN = 1;
 
 export class RelayCore {
     private rooms = new Map<string, Room>();
+    // Global replay protection keyed by `${from}:${id}`. Applies to every
+    // signed envelope, not just `send` — the spec calls for dedup on all
+    // envelopes, and without it `subscribe` / `create_topic` replays would
+    // be trivially accepted within the ±5 min timestamp window.
+    private recentEnvelopes = new Map<string, number>();
 
     acceptConnection(ws: WebSocket, roomName: string, challengeNonce: string) {
         const agent: Agent = {
@@ -107,6 +112,15 @@ export class RelayCore {
             this.sendError(agent.ws, 'envelope from does not match session');
             return;
         }
+
+        // Replay protection applies to every signed envelope, silently.
+        const replayKey = `${envelope.from}:${envelope.id}`;
+        const seen = this.recentEnvelopes.get(replayKey);
+        if (seen !== undefined && now - seen < REPLAY_WINDOW_SECONDS) {
+            return;
+        }
+        this.recentEnvelopes.set(replayKey, now);
+        this.pruneReplayWindow(now);
 
         switch (envelope.type) {
             case 'join':
@@ -226,15 +240,6 @@ export class RelayCore {
         }
         const room = this.rooms.get(roomName);
         if (!room) return;
-
-        const replayKey = `${envelope.from}:${envelope.id}`;
-        const now = Math.floor(Date.now() / 1000);
-        const seen = room.recentIds.get(replayKey);
-        if (seen !== undefined && now - seen < REPLAY_WINDOW_SECONDS) {
-            return;
-        }
-        room.recentIds.set(replayKey, now);
-        this.pruneReplayWindow(room, now);
 
         const topicName = envelope.payload.topic;
         const topic = room.topics.get(topicName);
@@ -484,7 +489,6 @@ export class RelayCore {
                 name: roomName,
                 agents: new Map(),
                 topics: new Map(),
-                recentIds: new Map(),
             };
             room.topics.set(MAIN_TOPIC, {
                 name: MAIN_TOPIC,
@@ -559,11 +563,11 @@ export class RelayCore {
         }));
     }
 
-    private pruneReplayWindow(room: Room, now: number) {
-        if (room.recentIds.size < 1000) return;
-        for (const [key, seen] of room.recentIds) {
+    private pruneReplayWindow(now: number) {
+        if (this.recentEnvelopes.size < REPLAY_PRUNE_THRESHOLD) return;
+        for (const [key, seen] of this.recentEnvelopes) {
             if (now - seen > REPLAY_WINDOW_SECONDS) {
-                room.recentIds.delete(key);
+                this.recentEnvelopes.delete(key);
             }
         }
     }
