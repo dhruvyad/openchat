@@ -1,4 +1,7 @@
 import {
+    blake3Cid,
+    fromBase64Url,
+    toBase64Url,
     verifyCapChain,
     verifyEnvelope,
     verifySessionAttestation,
@@ -8,7 +11,12 @@ import {
     type Envelope,
     type JoinPayload,
     type ListTopicsPayload,
+    type ResourceGetPayload,
+    type ResourceListPayload,
+    type ResourcePutPayload,
+    type ResourceSubscribePayload,
     type ResourceSummary,
+    type ResourceUnsubscribePayload,
     type SendPayload,
     type ServerEvent,
     type SessionAttestation,
@@ -50,10 +58,26 @@ interface Topic {
     members: Set<string>; // session pubkeys
 }
 
+interface Resource {
+    name: string;
+    cid: string;
+    kind: string;
+    mime: string;
+    size: number;
+    content: Uint8Array;
+    createdBy: string;
+    createdAt: number;
+    /** cap root required for future writes at this name; null = open */
+    validationHook: string | null;
+    /** session pubkeys subscribed to change notifications for this resource */
+    subscribers: Set<string>;
+}
+
 interface Room {
     name: string;
     agents: Map<string, Agent>;
     topics: Map<string, Topic>;
+    resources: Map<string, Resource>;
 }
 
 const TIMESTAMP_DRIFT_SECONDS = 300;
@@ -61,6 +85,10 @@ const REPLAY_WINDOW_SECONDS = 600;
 const REPLAY_PRUNE_THRESHOLD = 4096;
 const MAIN_TOPIC = 'main';
 const WS_OPEN = 1;
+/** Max inline resource content size in bytes (1 MiB). Matches PROTOCOL.md. */
+const MAX_RESOURCE_CONTENT_BYTES = 1024 * 1024;
+/** Max length of a resource name slot (bytes). */
+const MAX_RESOURCE_NAME_BYTES = 256;
 // Maximum cap chain length (leaf + proof ancestors). Caps one level past a
 // reasonable hierarchy and bounds per-action Ed25519 verification work so
 // malicious clients can't amplify DoS via enormous proof chains.
@@ -71,6 +99,28 @@ const MAX_CAP_CHAIN_DEPTH = 10;
 // trusted forever. 30 days is a practical ceiling that gives normal users
 // plenty of headroom while bounding the blast radius of a leak.
 const MAX_ATTESTATION_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
+
+function summarizeResource(r: {
+    name: string;
+    cid: string;
+    kind: string;
+    mime: string;
+    size: number;
+    createdBy: string;
+    createdAt: number;
+    validationHook: string | null;
+}): ResourceSummary {
+    return {
+        name: r.name,
+        cid: r.cid,
+        kind: r.kind,
+        mime: r.mime,
+        size: r.size,
+        created_by: r.createdBy,
+        created_at: r.createdAt,
+        validation_hook: r.validationHook,
+    };
+}
 
 function isCapShaped(value: unknown): value is Cap {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -234,6 +284,41 @@ export class RelayCore {
                     agent,
                     roomName,
                     envelope as Envelope<ListTopicsPayload>
+                );
+                return;
+            case 'resource_put':
+                this.handleResourcePut(
+                    agent,
+                    roomName,
+                    envelope as Envelope<ResourcePutPayload>
+                );
+                return;
+            case 'resource_get':
+                this.handleResourceGet(
+                    agent,
+                    roomName,
+                    envelope as Envelope<ResourceGetPayload>
+                );
+                return;
+            case 'resource_list':
+                this.handleResourceList(
+                    agent,
+                    roomName,
+                    envelope as Envelope<ResourceListPayload>
+                );
+                return;
+            case 'resource_subscribe':
+                this.handleResourceSubscribe(
+                    agent,
+                    roomName,
+                    envelope as Envelope<ResourceSubscribePayload>
+                );
+                return;
+            case 'resource_unsubscribe':
+                this.handleResourceUnsubscribe(
+                    agent,
+                    roomName,
+                    envelope as Envelope<ResourceUnsubscribePayload>
                 );
                 return;
             default:
@@ -705,6 +790,7 @@ export class RelayCore {
                 name: roomName,
                 agents: new Map(),
                 topics: new Map(),
+                resources: new Map(),
             };
             room.topics.set(MAIN_TOPIC, {
                 name: MAIN_TOPIC,
@@ -838,10 +924,307 @@ export class RelayCore {
         }));
     }
 
-    private snapshotResources(_room: Room): ResourceSummary[] {
-        // Resources landed in a later task; placeholder so the joined
-        // event carries the field the spec requires.
-        return [];
+    private snapshotResources(room: Room): ResourceSummary[] {
+        return Array.from(room.resources.values()).map((r) =>
+            summarizeResource(r)
+        );
+    }
+
+    private handleResourcePut(
+        agent: Agent,
+        roomName: string,
+        envelope: Envelope<ResourcePutPayload>
+    ) {
+        const fail = (error: string) => {
+            this.sendResult(agent.ws, {
+                type: 'resource_put_result',
+                id: envelope.id,
+                success: false,
+                error,
+            });
+        };
+
+        if (!agent.joined) return fail('not joined');
+        const room = this.rooms.get(roomName);
+        if (!room) return fail('unknown room');
+
+        const payload = envelope.payload;
+        if (
+            typeof payload?.name !== 'string' ||
+            payload.name.length === 0 ||
+            payload.name.length > MAX_RESOURCE_NAME_BYTES
+        ) {
+            return fail('invalid resource name');
+        }
+        if (typeof payload.kind !== 'string' || payload.kind.length === 0) {
+            return fail('invalid resource kind');
+        }
+        if (typeof payload.content !== 'string') {
+            return fail('content must be base64url-encoded string');
+        }
+
+        let content: Uint8Array;
+        try {
+            content = fromBase64Url(payload.content);
+        } catch (err) {
+            return fail(
+                `invalid content encoding: ${(err as Error).message}`
+            );
+        }
+        if (content.length > MAX_RESOURCE_CONTENT_BYTES) {
+            return fail(
+                `content exceeds ${MAX_RESOURCE_CONTENT_BYTES} bytes`
+            );
+        }
+
+        const existing = room.resources.get(payload.name);
+        // If a prior resource declared a validation_hook, all future writes
+        // at the same name must satisfy it. Without this, any agent could
+        // overwrite a gated resource (e.g. rewrite room-spec) at will.
+        if (existing?.validationHook !== null && existing !== undefined) {
+            const check = this.checkResourceCap(
+                payload.cap_proof,
+                agent,
+                existing.validationHook!,
+                roomName,
+                payload.name
+            );
+            if (!check.ok) {
+                return fail(
+                    `write denied: ${check.reason ?? 'no valid cap'}`
+                );
+            }
+        } else if (existing === undefined && payload.cap_proof !== undefined) {
+            // First put at this name with a cap_proof is unusual — the
+            // hook doesn't exist yet. Allow it but only if the cap proof
+            // is valid against the declared validation_hook. Otherwise
+            // the write is just an unnecessary cap proof on an open create.
+            // For simplicity we accept first creates without enforcing the
+            // cap at create time. The hook takes effect on subsequent writes.
+        }
+
+        const cid = blake3Cid(content);
+        const now = Math.floor(Date.now() / 1000);
+        const validationHook =
+            existing?.validationHook ?? payload.validation_hook ?? null;
+        if (
+            validationHook !== null &&
+            typeof validationHook !== 'string'
+        ) {
+            return fail('validation_hook must be a pubkey string or null');
+        }
+
+        const resource: Resource = {
+            name: payload.name,
+            cid,
+            kind: payload.kind,
+            mime: payload.mime ?? 'application/octet-stream',
+            size: content.length,
+            content,
+            createdBy: agent.sessionPubkey,
+            createdAt: now,
+            validationHook,
+            subscribers: existing?.subscribers ?? new Set(),
+        };
+        room.resources.set(payload.name, resource);
+
+        const summary = summarizeResource(resource);
+        this.sendResult(agent.ws, {
+            type: 'resource_put_result',
+            id: envelope.id,
+            success: true,
+            summary,
+        });
+
+        // Broadcast a room-wide changed event so agents can refresh their
+        // cached view. Exclude the writer: they got the put_result.
+        this.broadcastToRoom(
+            room,
+            {
+                type: 'resource_changed',
+                name: payload.name,
+                change: 'put',
+                summary,
+            },
+            agent.sessionPubkey
+        );
+    }
+
+    private handleResourceGet(
+        agent: Agent,
+        roomName: string,
+        envelope: Envelope<ResourceGetPayload>
+    ) {
+        const fail = (error: string) => {
+            this.sendResult(agent.ws, {
+                type: 'resource_get_result',
+                id: envelope.id,
+                success: false,
+                error,
+            });
+        };
+
+        if (!agent.joined) return fail('not joined');
+        const room = this.rooms.get(roomName);
+        if (!room) return fail('unknown room');
+
+        const { name, cid } = envelope.payload ?? {};
+        let resource: Resource | undefined;
+        if (typeof name === 'string') {
+            resource = room.resources.get(name);
+        } else if (typeof cid === 'string') {
+            for (const r of room.resources.values()) {
+                if (r.cid === cid) {
+                    resource = r;
+                    break;
+                }
+            }
+        } else {
+            return fail('resource_get requires name or cid');
+        }
+        if (!resource) return fail('resource not found');
+
+        // Re-encode content as base64url. Small cost, small payload.
+        const content = toBase64Url(resource.content);
+        this.sendResult(agent.ws, {
+            type: 'resource_get_result',
+            id: envelope.id,
+            success: true,
+            content,
+            summary: summarizeResource(resource),
+        });
+    }
+
+    private handleResourceList(
+        agent: Agent,
+        roomName: string,
+        envelope: Envelope<ResourceListPayload>
+    ) {
+        if (!agent.joined) {
+            this.sendError(agent.ws, 'not joined');
+            return;
+        }
+        const room = this.rooms.get(roomName);
+        const kind = envelope.payload?.kind;
+        const resources = room
+            ? Array.from(room.resources.values())
+                  .filter(
+                      (r) => typeof kind !== 'string' || r.kind === kind
+                  )
+                  .map(summarizeResource)
+            : [];
+        this.sendResult(agent.ws, {
+            type: 'resource_list_result',
+            id: envelope.id,
+            resources,
+        });
+    }
+
+    private handleResourceSubscribe(
+        agent: Agent,
+        roomName: string,
+        envelope: Envelope<ResourceSubscribePayload>
+    ) {
+        const name = envelope.payload?.name;
+        const fail = (error: string) => {
+            this.sendResult(agent.ws, {
+                type: 'resource_subscribe_result',
+                id: envelope.id,
+                success: false,
+                name: name ?? '',
+                error,
+            });
+        };
+        if (!agent.joined) return fail('not joined');
+        const room = this.rooms.get(roomName);
+        if (!room) return fail('unknown room');
+        if (typeof name !== 'string' || name.length === 0) {
+            return fail('invalid resource name');
+        }
+        const resource = room.resources.get(name);
+        if (!resource) return fail('unknown resource');
+
+        resource.subscribers.add(agent.sessionPubkey);
+        this.sendResult(agent.ws, {
+            type: 'resource_subscribe_result',
+            id: envelope.id,
+            success: true,
+            name,
+        });
+    }
+
+    private handleResourceUnsubscribe(
+        agent: Agent,
+        roomName: string,
+        envelope: Envelope<ResourceUnsubscribePayload>
+    ) {
+        const name = envelope.payload?.name;
+        const fail = (error: string) => {
+            this.sendResult(agent.ws, {
+                type: 'resource_unsubscribe_result',
+                id: envelope.id,
+                success: false,
+                name: name ?? '',
+                error,
+            });
+        };
+        if (!agent.joined) return fail('not joined');
+        const room = this.rooms.get(roomName);
+        if (!room) return fail('unknown room');
+        if (typeof name !== 'string') return fail('invalid resource name');
+        const resource = room.resources.get(name);
+        if (resource) resource.subscribers.delete(agent.sessionPubkey);
+        this.sendResult(agent.ws, {
+            type: 'resource_unsubscribe_result',
+            id: envelope.id,
+            success: true,
+            name,
+        });
+    }
+
+    private checkResourceCap(
+        proof: Cap | undefined,
+        agent: Agent,
+        expectedRoot: string,
+        roomName: string,
+        resourceName: string
+    ): { ok: boolean; reason?: string } {
+        if (!isCapShaped(proof)) {
+            return { ok: false, reason: 'missing or malformed cap proof' };
+        }
+        const chainLen = 1 + (proof.proof?.length ?? 0);
+        if (chainLen > MAX_CAP_CHAIN_DEPTH) {
+            return {
+                ok: false,
+                reason: `cap chain too deep (${chainLen} > ${MAX_CAP_CHAIN_DEPTH})`,
+            };
+        }
+        const resource = `room:${roomName}/resource:${resourceName}`;
+        const now = Math.floor(Date.now() / 1000);
+        const candidates: string[] = [agent.sessionPubkey];
+        if (
+            agent.identityPubkey !== undefined &&
+            agent.identityAttestation !== undefined &&
+            now <= agent.identityAttestation.expires_at
+        ) {
+            candidates.push(agent.identityPubkey);
+        }
+        let lastReason: string | undefined;
+        for (const audience of candidates) {
+            const result = verifyCapChain(proof, {
+                expectedAudience: audience,
+                expectedRoot,
+                requiredResource: resource,
+                requiredAction: 'write',
+                now,
+            });
+            if (result.ok) return result;
+            lastReason = result.reason;
+        }
+        return {
+            ok: false,
+            reason: lastReason ?? 'no valid cap for session or identity',
+        };
     }
 
     private pruneReplayWindow(now: number) {
