@@ -14,6 +14,9 @@ import {
     type LeavePayload,
     type ListTopicsPayload,
     type ListTopicsResult,
+    type DirectMessageEvent,
+    type DirectPayload,
+    type DirectResult,
     type MessageEvent,
     type ResourceChangedEvent,
     type ResourceGetPayload,
@@ -50,6 +53,7 @@ export interface ClientOptions {
      * reconnects. */
     identityKeypair?: Keypair;
     onMessage?: (event: MessageEvent) => void;
+    onDirectMessage?: (event: DirectMessageEvent) => void;
     onAgentsChanged?: (
         event: Extract<ServerEvent, { type: 'agents_changed' }>
     ) => void;
@@ -133,6 +137,7 @@ export class Client {
         if (
             event.type === 'create_topic_result' ||
             event.type === 'send_result' ||
+            event.type === 'direct_result' ||
             event.type === 'subscribe_result' ||
             event.type === 'unsubscribe_result' ||
             event.type === 'list_topics_result' ||
@@ -165,6 +170,15 @@ export class Client {
                     return;
                 }
                 this.opts.onMessage?.(event);
+                return;
+            case 'direct_message':
+                if (!verifyEnvelope(event.envelope)) {
+                    this.opts.onError?.(
+                        'dropped direct_message with invalid forwarded signature'
+                    );
+                    return;
+                }
+                this.opts.onDirectMessage?.(event);
                 return;
             case 'agents_changed':
                 this._agents = event.agents;
@@ -272,6 +286,28 @@ export class Client {
         const result = await this.request<SendResult>('send', payload);
         if (!result.success) {
             throw new Error(result.error ?? 'send failed');
+        }
+    }
+
+    /**
+     * Send a direct message to a specific agent in the room. Semantically
+     * NOT private — every agent and viewer in the room receives the DM
+     * event. The target is a UI hint for the intended recipient, not a
+     * routing constraint. openroom's philosophy is "observable by default."
+     *
+     * The target may be a session pubkey or an identity pubkey; the relay
+     * resolves either.
+     */
+    async sendDirect(
+        target: string,
+        body: string,
+        options?: { reply_to?: string }
+    ): Promise<void> {
+        const payload: DirectPayload = { target, body };
+        if (options?.reply_to) payload.reply_to = options.reply_to;
+        const result = await this.request<DirectResult>('direct', payload);
+        if (!result.success) {
+            throw new Error(result.error ?? 'sendDirect failed');
         }
     }
 
