@@ -2,18 +2,21 @@ import WebSocket from 'ws';
 import {
     generateKeypair,
     makeEnvelope,
+    makeSessionAttestation,
     toBase64Url,
     verifyEnvelope,
     type Cap,
     type CreateTopicPayload,
     type CreateTopicResult,
     type JoinPayload,
+    type Keypair,
     type LeavePayload,
     type ListTopicsPayload,
     type ListTopicsResult,
     type MessageEvent,
     type SendPayload,
     type ServerEvent,
+    type SessionAttestation,
     type SubscribePayload,
     type SubscribeResult,
     type TopicChangedEvent,
@@ -27,6 +30,11 @@ export interface ClientOptions {
     room: string;
     displayName?: string;
     description?: string;
+    /** Optional long-lived identity keypair. When supplied, the client
+     * creates a session attestation and sends it in the join payload so
+     * peers can recognize this session as the same identity across
+     * reconnects. */
+    identityKeypair?: Keypair;
     onMessage?: (event: MessageEvent) => void;
     onAgentsChanged?: (
         event: Extract<ServerEvent, { type: 'agents_changed' }>
@@ -179,6 +187,12 @@ export class Client {
             description: this.opts.description,
             features: ['openroom/1'],
         };
+        if (this.opts.identityKeypair) {
+            payload.session_attestation = makeSessionAttestation(
+                this.opts.identityKeypair,
+                this._publicKey
+            );
+        }
         const envelope = makeEnvelope(
             'join',
             payload,
@@ -268,13 +282,20 @@ export class Client {
         return toBase64Url(this._publicKey);
     }
 
-    /** Raw public key bytes for issuing caps. */
+    /** Raw session public key bytes (ephemeral). */
     get publicKey(): Uint8Array {
         return this._publicKey;
     }
 
-    /** Raw private key bytes for issuing and delegating caps. Handle with care. */
+    /** Raw session private key bytes (ephemeral). Handle with care. */
     get privateKey(): Uint8Array {
         return this._privateKey;
+    }
+
+    /** The long-lived identity pubkey if one was supplied, else undefined. */
+    get identityPubkey(): string | undefined {
+        return this.opts.identityKeypair
+            ? toBase64Url(this.opts.identityKeypair.publicKey)
+            : undefined;
     }
 }
