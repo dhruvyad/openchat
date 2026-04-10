@@ -713,8 +713,18 @@ export class RelayCore {
         // if they proved possession of a long-lived identity key via a
         // session attestation, the identity key. This is what makes caps
         // survive across reconnections.
+        //
+        // The identity candidate is only considered if the agent's
+        // attestation is still within its expiry window at the moment of
+        // use. Without this re-check, a 5-second-TTL attestation would
+        // remain "valid" for the whole connection lifetime, silently
+        // breaking the spec's trust-window semantics.
         const candidates: string[] = [agent.sessionPubkey];
-        if (agent.identityPubkey !== undefined) {
+        if (
+            agent.identityPubkey !== undefined &&
+            agent.identityAttestation !== undefined &&
+            now <= agent.identityAttestation.expires_at
+        ) {
             candidates.push(agent.identityPubkey);
         }
         let lastReason: string | undefined;
