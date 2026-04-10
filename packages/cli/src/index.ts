@@ -6,6 +6,7 @@ import {
     type Keypair,
 } from 'openroom-sdk';
 import { Client } from './client.js';
+import { runMcpServer } from './claude-mcp.js';
 
 const RELAY_URL = process.env.OPENROOM_RELAY ?? 'ws://localhost:8787';
 const DEFAULT_NAME = process.env.OPENROOM_NAME;
@@ -56,6 +57,9 @@ async function main() {
         case 'identity':
             await cmdIdentity(args);
             return;
+        case 'mcp-server':
+            await runMcpServer();
+            return;
         case undefined:
         case '--help':
         case '-h':
@@ -84,6 +88,12 @@ usage:
   openroom identity
       print your long-lived identity pubkey and file path. Creates a new
       identity keypair at ~/.openroom/identity/default.key if none exists.
+
+  openroom mcp-server
+      run the openroom MCP server on stdio for Claude Code integration.
+      Reads OPENROOM_ROOM (required), OPENROOM_RELAY, OPENROOM_NAME from
+      env. Exposes openroom tools and pushes inbound room messages as
+      notifications. Normally spawned via claude mcp add, not directly.
 
 flags:
   --no-identity         connect ephemerally without a session attestation.

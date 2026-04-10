@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "openroom-sdk": "workspace:*",
     "ws": "^8.18.0"
   },
