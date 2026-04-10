@@ -15,11 +15,21 @@ export function canonicalize(value: unknown): string {
     }
     if (typeof value === 'string') return JSON.stringify(value);
     if (Array.isArray(value)) {
-        return '[' + value.map(canonicalize).join(',') + ']';
+        // Match JSON.stringify: undefined entries become null in arrays.
+        return (
+            '[' +
+            value
+                .map((v) => canonicalize(v === undefined ? null : v))
+                .join(',') +
+            ']'
+        );
     }
     if (typeof value === 'object') {
+        // Match JSON.stringify: undefined properties are omitted entirely.
         const obj = value as Record<string, unknown>;
-        const keys = Object.keys(obj).sort();
+        const keys = Object.keys(obj)
+            .filter((k) => obj[k] !== undefined)
+            .sort();
         const parts = keys.map(
             (k) => JSON.stringify(k) + ':' + canonicalize(obj[k])
         );
