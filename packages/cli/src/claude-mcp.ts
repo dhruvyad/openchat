@@ -131,6 +131,17 @@ class OpenroomAdapter {
                 mcpLog('error', 'client_error', { reason });
                 process.stderr.write(`[openroom] ${reason}\n`);
             },
+            onClose: ({ code, reason }) => {
+                // The openroom WebSocket dropped for some reason — a
+                // relay restart, a network blip, or CF GCing our
+                // hibernated binding. Our SDK doesn't auto-reconnect,
+                // so the cleanest recovery is to exit the process.
+                // Claude Code respawns MCP servers on demand, so the
+                // next tool call will get a fresh adapter in the
+                // correct room.
+                mcpLog('warn', 'openroom_ws_closed', { code, reason });
+                process.exit(1);
+            },
         });
         adapter = new OpenroomAdapter(client);
         await client.connect();

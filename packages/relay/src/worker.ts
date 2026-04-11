@@ -113,16 +113,20 @@ export class RoomDurableObject {
         this.core = new RelayCore(this.makeHooks());
         this.initialized = this.initialize();
 
-        // Configure edge-level auto-responder for keepalive pings.
-        // Clients send raw text "ping" on a timer; the Cloudflare edge
-        // replies "pong" without waking the DO, which keeps the TCP
-        // connection warm past CF's ~100s idle-timeout threshold. Without
-        // this, a Claude MCP session sitting quietly between user
-        // prompts gets its WebSocket dropped, which the user observes as
-        // "Claude fell out of the room after a while."
-        this.state.setWebSocketAutoResponse(
-            new WebSocketRequestResponsePair('ping', 'pong')
-        );
+        // NOTE: we deliberately do NOT use
+        // `state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))`
+        // here. Edge-level auto-response keeps the client-to-edge TCP
+        // connection warm, but it NEVER wakes the DO. That means the
+        // hibernated WebSocket-to-DO binding goes garbage-collected
+        // after some idle window, and subsequent real messages disappear
+        // into the void while the client's TCP still reports ESTABLISHED.
+        // We observed this as "Claude MCP server joins the room, keepalive
+        // pings flow for a while, then it's silently dropped and the
+        // room goes empty even though the process is still running."
+        //
+        // Instead we handle `ping` in webSocketMessage: every keepalive
+        // wakes the DO and keeps the binding fresh. Slightly more CPU,
+        // but correctness over cost.
     }
 
     /**
@@ -162,14 +166,54 @@ export class RoomDurableObject {
      * hibernation with a stale roomName reference, we re-read the
      * snapshot from storage before dispatching. Storage is the durable
      * source of truth; in-memory state is a cache.
+     *
+     * After a cold load, proactively rehydrate every attached
+     * WebSocket into the room's agent map. Without this, sessions
+     * that were attached before hibernation would stay "zombies" —
+     * their TCP/WS is alive (kept that way by the edge auto-responder
+     * on our ping/pong keepalive) but they're not members of the
+     * room because nothing has called rehydrateFromAttachment on
+     * them since the DO woke. A new joiner would see them missing
+     * from agents_changed, and their own inbound messages would
+     * never reach the zombies either.
      */
     private async loadCoreIfNeeded(roomName: string): Promise<void> {
         this.roomName = roomName;
-        if (this.core.hasRoom(roomName)) return;
-        const snapshot =
-            this.pendingSnapshot ?? (await this.store.loadSnapshot());
-        this.core.loadSnapshot(roomName, snapshot);
-        this.pendingSnapshot = null;
+        const alreadyLoaded = this.core.hasRoom(roomName);
+        if (!alreadyLoaded) {
+            const snapshot =
+                this.pendingSnapshot ?? (await this.store.loadSnapshot());
+            this.core.loadSnapshot(roomName, snapshot);
+            this.pendingSnapshot = null;
+        }
+
+        // Rehydrate any zombie WebSockets that the DO accepted before
+        // hibernation / room-reload. `this.core.knows(ws)` is true for
+        // sessions already in the connections map, so the hot path
+        // iterates attached WSs but does nothing per-entry. When the
+        // DO has cold-loaded and sessions are still attached but not
+        // in the agent map, this restores them.
+        const attached = this.state.getWebSockets();
+        let zombiesRehydrated = 0;
+        for (const ws of attached) {
+            if (this.core.knows(ws)) continue;
+            try {
+                const restored = await this.rehydrateFromAttachment(ws);
+                if (restored) zombiesRehydrated++;
+            } catch (err) {
+                logEvent('warn', 'openroom.zombie_rehydration_failed', {
+                    room: roomName,
+                    err: String(err),
+                });
+            }
+        }
+        logEvent('info', 'openroom.load_core', {
+            room: roomName,
+            already_loaded: alreadyLoaded,
+            attached_ws_count: attached.length,
+            zombies_rehydrated: zombiesRehydrated,
+            core_connections: this.core.connectionCount,
+        });
     }
 
     async fetch(request: Request): Promise<Response> {
@@ -256,6 +300,33 @@ export class RoomDurableObject {
     ): Promise<void> {
         await this.initialized;
 
+        const text =
+            typeof message === 'string'
+                ? message
+                : new TextDecoder().decode(message);
+
+        // Keepalive. Clients send raw "ping" text on a timer; we reply
+        // "pong" so the client knows the round-trip works. The ping
+        // intentionally wakes this DO so that CF's internal binding
+        // between the hibernated WebSocket and the DO gets refreshed
+        // — see the constructor comment for why we don't use
+        // setWebSocketAutoResponse for this.
+        if (text === 'ping') {
+            try {
+                ws.send('pong');
+            } catch {
+                // ws may be mid-close; the close handler will take it
+                // out of the room shortly.
+            }
+            // Also rehydrate the agent if we don't know it yet, so the
+            // keepalive doubles as a zombie-revive path.
+            if (!this.core.knows(ws)) {
+                await this.rehydrateFromAttachment(ws);
+                await this.flushDirty();
+            }
+            return;
+        }
+
         // Rehydrate from attachment if this is the first message after
         // a hibernation wake (the core's in-memory connections map is
         // empty, but the ws itself survived).
@@ -267,10 +338,6 @@ export class RoomDurableObject {
             }
         }
 
-        const text =
-            typeof message === 'string'
-                ? message
-                : new TextDecoder().decode(message);
         this.core.deliverMessage(ws, text);
         await this.flushDirty();
     }

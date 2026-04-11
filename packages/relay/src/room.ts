@@ -256,6 +256,11 @@ export class RelayCore {
         return this.rooms.has(roomName);
     }
 
+    /** Count of live ws connections the core is tracking. Diagnostic only. */
+    get connectionCount(): number {
+        return this.connections.size;
+    }
+
     getAgent(ws: RelayWebSocket): Agent | undefined {
         return this.connections.get(ws);
     }

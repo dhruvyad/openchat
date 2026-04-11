@@ -105,6 +105,11 @@ export interface ClientOptions {
     onTopicChanged?: (event: TopicChangedEvent) => void;
     onResourceChanged?: (event: ResourceChangedEvent) => void;
     onError?: (reason: string) => void;
+    /** Fired when the underlying WebSocket closes for any reason —
+     *  a relay restart, a network drop, or an explicit leave. The
+     *  client does not auto-reconnect. Callers that want the
+     *  connection back should construct a new Client. */
+    onClose?: (meta: { code?: number; reason?: string }) => void;
 }
 
 interface PendingRequest {
@@ -115,11 +120,13 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 5000;
 
-/** WebSocket keepalive interval in milliseconds. The relay configures
- *  a CF edge auto-responder that replies "pong" to raw "ping" text
- *  without waking the DO — we send these on a timer so quiet
- *  connections don't get dropped by CF's ~100s idle timeout. 30s gives
- *  us ~3 pings before any realistic idle window would trigger a close.
+/** WebSocket keepalive interval in milliseconds. Clients send raw
+ *  "ping" text on this cadence; the relay DO handles it in
+ *  webSocketMessage (waking the DO) and replies "pong". We
+ *  deliberately do NOT use Cloudflare's edge auto-response because
+ *  that keeps the client-to-edge TCP alive without waking the DO,
+ *  and CF garbage-collects hibernated DO-to-socket bindings after
+ *  idle. Waking the DO on each ping refreshes that binding.
  */
 const KEEPALIVE_INTERVAL_MS = 30_000;
 
@@ -175,18 +182,28 @@ export class Client {
             this.joinReject?.(new Error(msg));
             this.opts.onError?.(msg);
         });
-        this.ws.addEventListener('close', () => {
+        this.ws.addEventListener('close', (ev) => {
             this.stopKeepalive();
             for (const pending of this.pending.values()) {
                 clearTimeout(pending.timer);
                 pending.reject(new Error('connection closed'));
             }
             this.pending.clear();
-            if (!this.joined) {
+            const wasJoined = this.joined;
+            this.joined = false;
+            if (!wasJoined) {
                 this.joinReject?.(
                     new Error('connection closed before join completed')
                 );
             }
+            const code = ev && typeof ev === 'object' && 'code' in ev
+                ? (ev as { code?: number }).code
+                : undefined;
+            const reason =
+                ev && typeof ev === 'object' && 'reason' in ev
+                    ? String((ev as { reason?: unknown }).reason)
+                    : undefined;
+            this.opts.onClose?.({ code, reason });
         });
     }
 
