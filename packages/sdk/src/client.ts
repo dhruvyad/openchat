@@ -125,19 +125,19 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 5000;
 
-/** WebSocket keepalive interval in milliseconds. Clients send raw
- *  "ping" text on this cadence; the relay DO handles it in
- *  webSocketMessage (waking the DO) and replies "pong". We
- *  deliberately do NOT use Cloudflare's edge auto-response because
- *  that keeps the client-to-edge TCP alive without waking the DO,
- *  and CF garbage-collects hibernated DO-to-socket bindings after
- *  idle. Waking the DO on each ping refreshes that binding.
+/** WebSocket keepalive interval in milliseconds. Sends WS protocol
+ *  PING control frames on this cadence (with a text-frame fallback
+ *  for browsers). We also fire a kickoff ping right after join so
+ *  there's TCP activity within a few seconds of connecting — some
+ *  consumer NAT routers drop idle TCP mappings after 15-30 seconds
+ *  which would manifest as abnormal closes before any traditional
+ *  keepalive interval elapsed.
  *
- *  20s keeps us well under any conceivable idle window (CF's
- *  documented timeout is ~100s but observed drops happen around
- *  90s), and gives us 4-5 pings before any realistic timeout.
+ *  10s keeps the socket warm under any consumer-grade NAT and gives
+ *  us 10 pings per 100s CF edge-idle window.
  */
-const KEEPALIVE_INTERVAL_MS = 20_000;
+const KEEPALIVE_INTERVAL_MS = 10_000;
+const KEEPALIVE_KICKOFF_MS = 3_000;
 
 export interface ClientKeypair {
     privateKey: Uint8Array;
@@ -356,7 +356,7 @@ export class Client {
         // their subprocess stays alive for days inside Claude Code.
         const wsWithPing = this.ws as unknown as { ping?: () => void };
         const useProtocolPing = typeof wsWithPing.ping === 'function';
-        this.keepaliveTimer = setInterval(() => {
+        const sendPing = () => {
             if (this.ws.readyState !== this.wsCtor.OPEN) return;
             try {
                 if (useProtocolPing) {
@@ -368,7 +368,14 @@ export class Client {
             } catch {
                 // ws layer may be mid-close; next close event cleans up
             }
-        }, KEEPALIVE_INTERVAL_MS);
+        };
+        // Kickoff ping shortly after join so there's TCP activity
+        // within seconds, well before any consumer NAT idle timeout.
+        const kickoff = setTimeout(sendPing, KEEPALIVE_KICKOFF_MS);
+        const kickoffRef = kickoff as unknown as { unref?: () => void };
+        if (typeof kickoffRef.unref === 'function') kickoffRef.unref();
+
+        this.keepaliveTimer = setInterval(sendPing, KEEPALIVE_INTERVAL_MS);
         // Don't keep the Node event loop alive on the interval alone.
         // The `ws` package's timers are already unref'd by default, but
         // `setInterval` in Node returns a Timeout object that has an
