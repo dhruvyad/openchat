@@ -99,3 +99,60 @@ export function timestamp(input: Date | number = Date.now()): string {
     const ss = String(d.getSeconds()).padStart(2, '0');
     return dim(`${hh}:${mm}:${ss}`);
 }
+
+// ---- Box drawing ---------------------------------------------------------
+
+import boxenImpl from 'boxen';
+
+const ANSI_ESCAPE = /\x1b\[[0-9;]*m/g;
+
+/** Measure the visible (on-screen) width of a string by stripping ANSI
+ *  escape sequences before counting. Used for aligning colored content in
+ *  fixed-width columns where `.length` would count escape bytes. */
+export function visibleLength(s: string): number {
+    return s.replace(ANSI_ESCAPE, '').length;
+}
+
+/**
+ * Render `lines` inside a rounded box with an optional `title` embedded in
+ * the top border. Delegates to the `boxen` library so we get ANSI-aware
+ * width, title alignment, margin/padding, and consistent border drawing
+ * without reimplementing any of it.
+ *
+ *     ╭─ title ────────────────╮
+ *     │                        │
+ *     │  line one              │
+ *     │  line two (colored)    │
+ *     │                        │
+ *     ╰────────────────────────╯
+ */
+export function box(options: {
+    title?: string;
+    lines: string[];
+    padding?: number;
+    minWidth?: number;
+}): string {
+    const horizontalPadding = options.padding ?? 2;
+    const content = options.lines.join('\n');
+    return boxenImpl(content, {
+        title: options.title,
+        titleAlignment: 'left',
+        borderStyle: 'round',
+        borderColor: useColor ? 'gray' : undefined,
+        padding: {
+            top: 1,
+            bottom: 1,
+            left: horizontalPadding,
+            right: horizontalPadding,
+        },
+        width: options.minWidth,
+    });
+}
+
+/** Left-pad a colored string to an exact visible width. Used for aligning
+ *  command-table rows where the first column contains ANSI color. */
+export function padVisible(s: string, width: number): string {
+    const pad = width - visibleLength(s);
+    if (pad <= 0) return s;
+    return s + ' '.repeat(pad);
+}

@@ -18,12 +18,14 @@ import { Client } from './client.js';
 import { runMcpServer } from './claude-mcp.js';
 import {
     bold,
+    box,
     cyan,
     dim,
     gray,
     green,
     header,
     keyValue,
+    padVisible,
     red,
     shortPubkey,
     tag,
@@ -127,60 +129,107 @@ async function main() {
 }
 
 function printUsage() {
-    const lines = [
-        bold('openroom') + dim('  agents coordinating across the internet'),
-        '',
-        bold('Usage'),
-        `  ${green('openroom')} ${cyan('<command>')} ${dim('[args...]')}`,
-        '',
-        bold('Commands'),
-        `  ${cyan('send')}      ${dim('<room> <message> [--topic <name>] [--no-identity]')}`,
-        `             send a single message and exit. Defaults to topic 'main'.`,
-        '',
-        `  ${cyan('listen')}    ${dim('<room> [--topic <name> ...] [--no-identity]')}`,
-        `             join a room and stream messages. Without --topic, listens`,
-        `             on 'main'. With --topic, unsubscribes from 'main' and`,
-        `             subscribes to the given topics (creating them if needed).`,
-        '',
-        `  ${cyan('identity')}`,
-        `             print your long-lived identity pubkey and file path.`,
-        `             Creates ~/.openroom/identity/default.key if missing.`,
-        '',
-        `  ${cyan('claude')}    ${dim('<room> [--no-identity] [--public --description "..."]')}`,
-        `             ${dim('        [--authority] [--yes]')}`,
-        `             spawn Claude Code with the openroom MCP server wired up`,
-        `             so the next session can send/subscribe/see messages in`,
-        `             the room. ${yellow('--public')} announces the room to the directory`,
-        `             on openroom.channel; requires ${yellow('--description')}.`,
-        `             ${yellow('--authority')} writes a directory-config resource gating`,
-        `             future announcements to your identity. ${yellow('--yes')} skips the`,
-        `             first-publish confirmation.`,
-        '',
-        `  ${cyan('unpublish')} ${dim('<room>')}`,
-        `             remove an earlier announcement from the directory.`,
-        `             Only the original announcer or configured authority.`,
-        '',
-        `  ${cyan('mcp-server')}`,
-        `             run the openroom MCP server on stdio. Reads OPENROOM_ROOM`,
-        `             (required), OPENROOM_RELAY, OPENROOM_NAME from env.`,
-        `             Normally spawned by claude, not directly.`,
-        '',
-        bold('Flags'),
-        `  ${yellow('--no-identity')}   connect ephemerally without a session attestation.`,
-        `                  Caps audienced at a persistent identity won't work.`,
-        `  ${yellow('--topic')} ${dim('<name>')}  subscribe / post on a non-default topic.`,
-        '',
-        bold('Environment'),
-        keyValue([
-            ['OPENROOM_RELAY', `relay url ${dim('(default wss://relay.openroom.channel)')}`],
-            ['OPENROOM_NAME', 'display name for this session'],
-            ['OPENROOM_IDENTITY_PATH', 'override identity keypair file path'],
-            ['NO_COLOR', 'disable ANSI colors'],
-        ]),
-        '',
-        dim('docs: https://openroom.channel/docs'),
+    // Hero — name, tagline, live URL. The tagline uses dim so the box
+    // feels like a header more than a primary focal point.
+    const hero = box({
+        title: bold('openroom'),
+        lines: [
+            dim('agents coordinating across the internet'),
+            dim('https://openroom.channel'),
+        ],
+    });
+
+    // Commands table. First column is the bold colored command name
+    // plus its <args>, padded to a fixed visible width so descriptions
+    // on the second line align. Continuation lines are indented to the
+    // same column as the description.
+    const COL = 30;
+    const commandEntries: Array<[string, string[]]> = [
+        [
+            `${cyan('send')}      ${dim('<room> <message>')}`,
+            ['send a single message and exit.'],
+        ],
+        [
+            `${cyan('listen')}    ${dim('<room>')}`,
+            [
+                'join a room and stream messages.',
+                `${dim('--topic <name>')} for gated sub-streams.`,
+            ],
+        ],
+        [
+            `${cyan('identity')}`,
+            [
+                'print or create your long-lived',
+                'identity key under ~/.openroom.',
+            ],
+        ],
+        [
+            `${cyan('claude')}    ${dim('<room>')}`,
+            [
+                'spawn Claude Code with the openroom',
+                'MCP server wired up to the room.',
+                `${yellow('--public')} + ${yellow('--description')} to announce.`,
+            ],
+        ],
+        [
+            `${cyan('unpublish')} ${dim('<room>')}`,
+            ['remove an announcement from the directory.'],
+        ],
+        [
+            `${cyan('mcp-server')}`,
+            [
+                'run the MCP server on stdio for any',
+                'MCP host. Normally spawned by claude.',
+            ],
+        ],
     ];
-    console.log(lines.join('\n'));
+
+    const commandLines: string[] = [];
+    commandEntries.forEach(([left, descLines], idx) => {
+        const padded = padVisible(left, COL);
+        commandLines.push(`${padded}${descLines[0]}`);
+        for (let i = 1; i < descLines.length; i++) {
+            commandLines.push(`${' '.repeat(COL)}${dim(descLines[i]!)}`);
+        }
+        if (idx < commandEntries.length - 1) commandLines.push('');
+    });
+
+    const commandsBox = box({
+        title: bold('commands'),
+        lines: commandLines,
+    });
+
+    const flagsBox = box({
+        title: bold('flags'),
+        lines: [
+            `${yellow('--no-identity')}     ${dim('connect ephemerally without a session attestation')}`,
+            `${yellow('--topic')} ${dim('<name>')}    ${dim('subscribe / post on a non-default topic')}`,
+            `${yellow('--yes')}             ${dim('skip the first-publish confirmation prompt')}`,
+        ],
+    });
+
+    const envBox = box({
+        title: bold('environment'),
+        lines: [
+            `${cyan('OPENROOM_RELAY')}          ${dim('relay url (default wss://relay.openroom.channel)')}`,
+            `${cyan('OPENROOM_NAME')}           ${dim('display name for this session')}`,
+            `${cyan('OPENROOM_IDENTITY_PATH')}  ${dim('override identity keypair file path')}`,
+            `${cyan('NO_COLOR')}                ${dim('disable ANSI colors')}`,
+        ],
+    });
+
+    console.log();
+    console.log(hero);
+    console.log();
+    console.log(commandsBox);
+    console.log();
+    console.log(flagsBox);
+    console.log();
+    console.log(envBox);
+    console.log();
+    console.log(dim('  usage: ') + green('openroom') + ' ' + cyan('<command>') + dim(' [args...]'));
+    console.log(dim('  docs:  https://openroom.channel/docs'));
+    console.log();
 }
 
 async function getIdentity(args: ParsedArgs): Promise<Keypair | undefined> {
@@ -296,13 +345,18 @@ async function cmdListen(args: ParsedArgs) {
         ? cyan(shortPubkey(client.identityPubkey))
         : dim('ephemeral');
 
-    console.log(header(`listening on ${bold(room)}`, RELAY_URL));
+    console.log();
     console.log(
-        keyValue([
-            ['topics', listeningOn.map((t) => dim('#') + t).join(' ')],
-            ['session', dim(sessionShort)],
-            ['identity', identityLabel],
-        ])
+        box({
+            title: bold('listening'),
+            lines: [
+                `${dim('room     ')} ${bold(room)}`,
+                `${dim('topics   ')} ${listeningOn.map((t) => cyan('#') + t).join('  ')}`,
+                `${dim('relay    ')} ${dim(RELAY_URL)}`,
+                `${dim('session  ')} ${dim(sessionShort)}`,
+                `${dim('identity ')} ${identityLabel}`,
+            ],
+        })
     );
     console.log(dim('  (Ctrl-C to leave)'));
     console.log();
@@ -319,12 +373,15 @@ async function cmdIdentity(_args: ParsedArgs) {
     const keypair = await loadOrCreateIdentity(IDENTITY_PATH_ENV);
     const storedAt = IDENTITY_PATH_ENV ?? defaultIdentityPath();
     const pubkey = toBase64Url(keypair.publicKey);
-    console.log(header('identity'));
+    console.log();
     console.log(
-        keyValue([
-            ['pubkey', cyan(pubkey)],
-            ['file', dim(storedAt)],
-        ])
+        box({
+            title: bold('identity'),
+            lines: [
+                `${dim('pubkey ')} ${cyan(pubkey)}`,
+                `${dim('file   ')} ${dim(storedAt)}`,
+            ],
+        })
     );
 }
 
@@ -580,23 +637,20 @@ async function confirmFirstPublish(
     if (await hasPublishConsent()) return true;
 
     console.log();
-    console.log(header('publish to openroom directory'));
     console.log(
-        keyValue([
-            ['room', bold(room)],
-            ['description', description],
-            ['relay', dim(relayHttpBase())],
-        ])
+        box({
+            title: bold('publish to openroom directory'),
+            lines: [
+                `${dim('room        ')} ${bold(room)}`,
+                `${dim('description ')} ${description}`,
+                `${dim('relay       ')} ${dim(relayHttpBase())}`,
+                '',
+                dim('this will make the room visible to anyone browsing'),
+                dim('openroom.channel. The description and your identity'),
+                dim('pubkey become attributable to you.'),
+            ],
+        })
     );
-    console.log();
-    console.log(
-        dim('  this will make the room visible to anyone browsing')
-    );
-    console.log(
-        dim('  openroom.channel. The description and your identity')
-    );
-    console.log(dim('  pubkey become attributable to you.'));
-    console.log();
 
     const rl = readline.createInterface({
         input: process.stdin,
