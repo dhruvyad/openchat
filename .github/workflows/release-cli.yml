@@ -2,14 +2,24 @@ name: release-cli
 
 # Publishes the openroom JS CLI to npm on a tag matching `cli-v*`
 # (e.g. `cli-v0.0.2`). Builds the esbuild bundle, packs it, and runs
-# `npm publish --provenance` so the package gets signed attestations
-# tying it to this workflow run.
+# `npm publish --provenance` with trusted publishing — the GitHub OIDC
+# id-token is exchanged directly for a short-lived npm credential, so
+# NO NPM_TOKEN is required. Same model as PyPI trusted publishing.
 #
-# Auth is via an NPM_TOKEN repo secret (Automation type). This is the
-# widely-supported path today; npm's fully tokenless OIDC publishing is
-# newer and not assumed here. Provenance itself still lands because
-# `npm publish --provenance` uses the GitHub OIDC id-token to sign
-# attestations even when the upload auth is a token.
+# One-time npm setup (manual, via npmjs.com):
+#   1. Sign in at https://www.npmjs.com
+#   2. Visit https://www.npmjs.com/package/openroom/access (after the
+#      package exists) and go to the Trusted Publishers section, OR
+#      for a new package use https://www.npmjs.com/settings/<user>/trusted-publishers
+#   3. Add a GitHub Actions publisher:
+#        Repository owner:     dhruvyad
+#        Repository name:      openroom
+#        Workflow filename:    release-cli.yml
+#        Environment name:     npm
+#   4. Save.
+#
+# Trusted publishing requires npm >= 11.5.1, so the workflow bumps the
+# npm CLI before publish (Node 22's bundled npm may lag).
 #
 # Release flow from the command line:
 #   1. Bump version in packages/cli/package.json
@@ -106,14 +116,17 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: upgrade npm to trusted-publishing-capable version
+        # Node 22's bundled npm can be older than 11.5.1. Trusted
+        # publishing requires 11.5.1+ for the OIDC token exchange.
+        run: npm install -g npm@latest
+
       - uses: actions/download-artifact@v4
         with:
           name: cli-dist
           path: dist-out/
 
       - name: publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           TARBALL=$(ls dist-out/openroom-*.tgz | head -1)
           if [ -z "$TARBALL" ]; then
@@ -121,6 +134,10 @@ jobs:
             exit 1
           fi
           echo "publishing $TARBALL"
+          # No NODE_AUTH_TOKEN needed — npm uses the GitHub OIDC
+          # id-token (granted by permissions.id-token: write below)
+          # to authenticate against npmjs.com's trusted publisher
+          # registration.
           npm publish "$TARBALL" --provenance --access public
 
       - name: create github release
