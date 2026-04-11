@@ -142,6 +142,14 @@ class OpenroomAdapter {
                 mcpLog('warn', 'openroom_ws_closed', { code, reason });
                 process.exit(1);
             },
+            onKeepalivePing: () => {
+                // Diagnostic: prove the keepalive is actually firing
+                // inside the subprocess. If this doesn't show up in
+                // mcp.log every ~30s, the Node event loop is being
+                // starved by something claude code is doing and we
+                // need to investigate upstream.
+                mcpLog('debug', 'keepalive_ping_sent', {});
+            },
         });
         adapter = new OpenroomAdapter(client);
         await client.connect();

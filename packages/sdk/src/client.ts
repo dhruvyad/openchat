@@ -110,6 +110,11 @@ export interface ClientOptions {
      *  client does not auto-reconnect. Callers that want the
      *  connection back should construct a new Client. */
     onClose?: (meta: { code?: number; reason?: string }) => void;
+    /** Fired every time the keepalive ping is sent. Diagnostic only;
+     *  callers typically don't need to know, but the MCP adapter
+     *  uses it to prove the keepalive path is running inside
+     *  subprocess-hosted servers. */
+    onKeepalivePing?: () => void;
 }
 
 interface PendingRequest {
@@ -127,8 +132,12 @@ const REQUEST_TIMEOUT_MS = 5000;
  *  that keeps the client-to-edge TCP alive without waking the DO,
  *  and CF garbage-collects hibernated DO-to-socket bindings after
  *  idle. Waking the DO on each ping refreshes that binding.
+ *
+ *  20s keeps us well under any conceivable idle window (CF's
+ *  documented timeout is ~100s but observed drops happen around
+ *  90s), and gives us 4-5 pings before any realistic timeout.
  */
-const KEEPALIVE_INTERVAL_MS = 30_000;
+const KEEPALIVE_INTERVAL_MS = 20_000;
 
 export interface ClientKeypair {
     privateKey: Uint8Array;
@@ -336,6 +345,7 @@ export class Client {
             if (this.ws.readyState !== this.wsCtor.OPEN) return;
             try {
                 this.ws.send('ping');
+                this.opts.onKeepalivePing?.();
             } catch {
                 // ws layer may be mid-close; next close event cleans up
             }
