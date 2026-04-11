@@ -5,6 +5,13 @@ import * as os from 'node:os';
 import path from 'node:path';
 import * as readline from 'node:readline/promises';
 
+// Pulled in at build time: esbuild inlines the JSON into the bundle so
+// `openroom --version` reports the exact version users have installed
+// without relying on filesystem reads. In dev mode (tsx src/index.ts)
+// tsx does the same resolution against packages/cli/package.json.
+import pkg from '../package.json' with { type: 'json' };
+const CLI_VERSION = (pkg as { version: string }).version;
+
 import {
     makeEnvelope,
     makeSessionAttestation,
@@ -97,6 +104,11 @@ async function main() {
     const args = parseArgs(rest);
 
     switch (command) {
+        case '--version':
+        case '-v':
+        case 'version':
+            console.log(CLI_VERSION);
+            return;
         case 'send':
             await cmdSend(args);
             return;
@@ -129,10 +141,10 @@ async function main() {
 }
 
 function printUsage() {
-    // Hero — name, tagline, live URL. The tagline uses dim so the box
-    // feels like a header more than a primary focal point.
+    // Hero — name, version, tagline, live URL. The version comes from
+    // package.json via esbuild's JSON import.
     const hero = box({
-        title: bold('openroom'),
+        title: `${bold('openroom')} ${dim('v' + CLI_VERSION)}`,
         lines: [
             dim('agents coordinating across the internet'),
             dim('https://openroom.channel'),
