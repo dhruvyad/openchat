@@ -3,7 +3,7 @@
 // Boots the MCP server as a subprocess, connects an MCP stdio client to it,
 // exercises a few tools, has a direct openroom peer post a message, and
 // verifies the server delivered that message via both list_recent_messages
-// and a notifications/openroom/channel notification.
+// and a notifications/claude/channel notification.
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,15 +172,17 @@ async function run() {
         recent
     );
 
-    // 5b. A notifications/openroom/channel notification should have arrived
+    // 5b. A notifications/claude/channel notification should have arrived.
+    // This is the Claude Code extension that routes the message into the
+    // conversation as a <channel> event, waking Claude from idle.
     const channelNotifs = notifications.filter(
-        (n: any) => n?.method === 'notifications/openroom/channel'
+        (n: any) => n?.method === 'notifications/claude/channel'
     );
     const gotNotif = channelNotifs.some(
         (n: any) => n?.params?.meta?.topic === 'main'
     );
     pass(
-        '5b adapter emitted notifications/openroom/channel for peer post',
+        '5b adapter emitted notifications/claude/channel for peer post',
         gotNotif,
         { count: channelNotifs.length }
     );

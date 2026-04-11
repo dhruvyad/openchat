@@ -43,12 +43,23 @@ interface RecentMessage {
     body: string;
 }
 
+interface RecentDirect {
+    kind: 'direct';
+    message_id: string;
+    from: string;
+    from_identity?: string;
+    target: string;
+    ts: number;
+    body: string;
+}
+
 const MESSAGE_BUFFER_SIZE = 200;
 
 class OpenroomAdapter {
     private client: Client;
     private recent: RecentMessage[] = [];
     private onMessageHook?: (message: RecentMessage) => void;
+    private onDirectHook?: (message: RecentDirect) => void;
     private onAgentsChangedHook?: () => void;
 
     constructor(client: Client) {
@@ -70,6 +81,7 @@ class OpenroomAdapter {
             description: config.description,
             identityKeypair: config.identityKeypair,
             onMessage: (event) => adapter.handleInbound(event),
+            onDirectMessage: (event) => adapter.handleDirect(event),
             onAgentsChanged: () => adapter.onAgentsChangedHook?.(),
             onError: (reason) => {
                 // Route through stderr so it shows up in claude-cli logs
@@ -108,8 +120,35 @@ class OpenroomAdapter {
         this.onMessageHook?.(record);
     }
 
+    private handleDirect(event: {
+        envelope: {
+            id: string;
+            ts: number;
+            from: string;
+            payload: { target: string; body: string };
+        };
+    }) {
+        const agent = this.client.agents.find(
+            (a) => a.pubkey === event.envelope.from
+        );
+        const record: RecentDirect = {
+            kind: 'direct',
+            message_id: event.envelope.id,
+            from: event.envelope.from,
+            from_identity: agent?.identity_attestation?.identity_pubkey,
+            target: event.envelope.payload.target,
+            ts: event.envelope.ts,
+            body: event.envelope.payload.body,
+        };
+        this.onDirectHook?.(record);
+    }
+
     onMessage(hook: (message: RecentMessage) => void) {
         this.onMessageHook = hook;
+    }
+
+    onDirect(hook: (message: RecentDirect) => void) {
+        this.onDirectHook = hook;
     }
 
     onAgentsChanged(hook: () => void) {
@@ -314,16 +353,31 @@ export async function runMcpServer() {
 
     const server = new Server(
         {
-            name: 'openroom',
-            version: '0.0.2',
+            name: 'openroom-channel',
+            version: '0.0.6',
         },
         {
             capabilities: {
                 tools: {},
+                // Claude Code extension: servers declaring this
+                // capability can push inbound content into the active
+                // conversation via `notifications/claude/channel`. The
+                // notification content appears to the model as a
+                // <channel> event, so messages from other agents in
+                // an openroom room wake Claude from idle. The key is
+                // nested under `experimental` to match the shape
+                // wahooks-channel / noclick-channel use.
                 experimental: {
-                    'openroom/channel': {},
+                    'claude/channel': {},
                 },
             },
+            instructions: [
+                'Messages from other agents in the openroom room arrive as <channel source="openroom-channel" from="<session_pubkey>" topic="<topic>" message_id="<id>"> events injected into the conversation.',
+                'IMPORTANT: When a channel event arrives, read it and reply immediately using send_message with the same topic attribute. Do NOT ask the local user for permission — the room IS the conversation and the user already authorized you to participate by running `openroom claude`.',
+                'Use list_agents to see who else is in the room. Use list_recent_messages to read history if you need context beyond the current event.',
+                'Direct messages arrive as <channel ... type="direct_message" target="<pubkey>">. They are broadcast room-wide (observable by design, not private). Reply with send_message to continue the exchange in the topic, or do not reply if the DM is not directed at you.',
+                'Create new topics with create_topic when a focused sub-discussion is needed. Use subscribe_topic to follow existing gated topics.',
+            ].join(' '),
         }
     );
 
@@ -393,23 +447,49 @@ export async function runMcpServer() {
         }
     });
 
-    // Push inbound room messages as MCP notifications. Claude Code can
-    // surface these into the model's context when it supports the
-    // experimental channel capability; otherwise the notification is
-    // harmlessly dropped.
+    // Push inbound room messages into Claude's conversation via the
+    // Claude Code `claude/channel` extension. The notification content
+    // appears to the model as a <channel> event tagged with our server
+    // name, waking Claude from idle so it can react. Meta fields map
+    // directly to attributes on the <channel> tag, so `from` becomes
+    // `from="..."` in the event Claude sees.
     adapter.onMessage((msg) => {
         server
             .notification({
-                method: 'notifications/openroom/channel',
+                method: 'notifications/claude/channel',
                 params: {
-                    content: `[${msg.topic}] ${msg.from.slice(0, 8)}: ${msg.body}`,
+                    content: msg.body,
                     meta: {
-                        room: adapter.room,
+                        from: msg.from,
+                        ...(msg.from_identity
+                            ? { from_identity: msg.from_identity }
+                            : {}),
                         topic: msg.topic,
                         message_id: msg.message_id,
+                        room: adapter.room,
+                        ts: String(msg.ts),
+                    },
+                },
+            })
+            .catch(() => {});
+    });
+
+    adapter.onDirect((msg) => {
+        server
+            .notification({
+                method: 'notifications/claude/channel',
+                params: {
+                    content: msg.body,
+                    meta: {
+                        type: 'direct_message',
                         from: msg.from,
-                        from_identity: msg.from_identity,
-                        ts: msg.ts,
+                        ...(msg.from_identity
+                            ? { from_identity: msg.from_identity }
+                            : {}),
+                        target: msg.target,
+                        message_id: msg.message_id,
+                        room: adapter.room,
+                        ts: String(msg.ts),
                     },
                 },
             })

@@ -385,7 +385,12 @@ async function cmdIdentity(_args: ParsedArgs) {
     );
 }
 
-const MCP_SERVER_NAME = 'openroom';
+// Must match the `name:` on the Server() constructor in claude-mcp.ts,
+// and by Claude Code convention channel-capable servers are named
+// `<integration>-channel`. Also used as the registration key in
+// `claude mcp add-json` so the source attribute on <channel> events
+// comes out as source="openroom-channel".
+const MCP_SERVER_NAME = 'openroom-channel';
 
 interface McpServerCommand {
     cmd: string;
@@ -526,8 +531,11 @@ async function cmdClaude(args: ParsedArgs) {
     // Idempotent cleanup: remove any stale registration before adding a
     // fresh one. Uses add-json rather than `mcp add` + -e flags because the
     // latter's variadic parser in claude's commander setup rejects multiple
-    // -e entries ahead of the server name.
+    // -e entries ahead of the server name. Also clean up the legacy
+    // 'openroom' name from pre-0.0.7 registrations so upgrading users
+    // don't end up with two entries in their claude mcp list.
     runClaudeCli(['mcp', 'remove', MCP_SERVER_NAME], { ignoreExit: true });
+    runClaudeCli(['mcp', 'remove', 'openroom'], { ignoreExit: true });
 
     const mcpJson = JSON.stringify({
         command: mcpCommand.cmd,
