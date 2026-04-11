@@ -22,6 +22,10 @@
 // switch to that method name, but for v1 a namespaced custom notification
 // is the pragmatic choice.
 
+import { appendFileSync, mkdirSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -33,6 +37,41 @@ import { type Keypair } from 'openroom-sdk';
 import { loadOrCreateIdentity } from 'openroom-sdk/node';
 
 import { Client } from './client.js';
+
+// Diagnostic log. Claude Code captures MCP subprocess stderr but only
+// writes it to debug logs when --debug is set, which is not the default.
+// We append structured events to ~/.openroom/mcp.log so the user can
+// `tail -f` it in another terminal to see what the MCP server is doing
+// inside a Claude session. Every line is a JSON object with ts/level/
+// event/meta for easy grep + parse.
+const MCP_LOG_PATH = path.join(os.homedir(), '.openroom', 'mcp.log');
+function mcpLog(
+    level: 'debug' | 'info' | 'warn' | 'error',
+    event: string,
+    meta: Record<string, unknown> = {},
+): void {
+    const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        pid: process.pid,
+        level,
+        event,
+        ...meta,
+    });
+    try {
+        mkdirSync(path.dirname(MCP_LOG_PATH), { recursive: true, mode: 0o700 });
+        appendFileSync(MCP_LOG_PATH, line + '\n');
+    } catch {
+        // Best-effort — never crash the MCP server on log failure.
+    }
+    // Also echo to stderr so if anyone IS watching claude's debug log
+    // they see it there too. Never stdout — that's the MCP protocol
+    // channel and any writes would corrupt JSON-RPC framing.
+    try {
+        process.stderr.write('[openroom-channel] ' + line + '\n');
+    } catch {
+        // stderr might be closed during shutdown; ignore.
+    }
+}
 
 interface RecentMessage {
     message_id: string;
@@ -82,10 +121,14 @@ class OpenroomAdapter {
             identityKeypair: config.identityKeypair,
             onMessage: (event) => adapter.handleInbound(event),
             onDirectMessage: (event) => adapter.handleDirect(event),
-            onAgentsChanged: () => adapter.onAgentsChangedHook?.(),
+            onAgentsChanged: (event) => {
+                mcpLog('debug', 'agents_changed', {
+                    count: event.agents.length,
+                });
+                adapter.onAgentsChangedHook?.();
+            },
             onError: (reason) => {
-                // Route through stderr so it shows up in claude-cli logs
-                // without corrupting the MCP stdio channel.
+                mcpLog('error', 'client_error', { reason });
                 process.stderr.write(`[openroom] ${reason}\n`);
             },
         });
@@ -218,6 +261,10 @@ class OpenroomAdapter {
     get room() {
         return this.client.room;
     }
+
+    get agentCount() {
+        return this.client.agents.length;
+    }
 }
 
 // ---- Tool schemas ------------------------------------------------------
@@ -329,8 +376,17 @@ async function loadIdentityFromEnv(): Promise<Keypair | undefined> {
 }
 
 export async function runMcpServer() {
+    mcpLog('info', 'startup', {
+        cwd: process.cwd(),
+        argv: process.argv.slice(1),
+        env_room: process.env.OPENROOM_ROOM,
+        env_relay: process.env.OPENROOM_RELAY,
+        env_name: process.env.OPENROOM_NAME,
+        env_no_identity: process.env.OPENROOM_NO_IDENTITY,
+    });
     const room = process.env.OPENROOM_ROOM;
     if (!room) {
+        mcpLog('error', 'missing_room_env');
         process.stderr.write(
             'openroom mcp-server: OPENROOM_ROOM env var is required\n'
         );
@@ -341,15 +397,41 @@ export async function runMcpServer() {
     const displayName = process.env.OPENROOM_NAME ?? 'claude';
     const description =
         process.env.OPENROOM_DESCRIPTION ?? 'Claude session via openroom';
-    const identity = await loadIdentityFromEnv();
 
-    const adapter = await OpenroomAdapter.create({
-        relayUrl,
-        room,
-        displayName,
-        description,
-        identityKeypair: identity,
-    });
+    let identity: Keypair | undefined;
+    try {
+        identity = await loadIdentityFromEnv();
+        mcpLog('info', 'identity_loaded', {
+            has_identity: !!identity,
+            no_identity_env: !!process.env.OPENROOM_NO_IDENTITY,
+        });
+    } catch (err) {
+        mcpLog('error', 'identity_load_failed', {
+            error: String(err),
+        });
+        throw err;
+    }
+
+    let adapter: OpenroomAdapter;
+    try {
+        adapter = await OpenroomAdapter.create({
+            relayUrl,
+            room,
+            displayName,
+            description,
+            identityKeypair: identity,
+        });
+        mcpLog('info', 'adapter_created', {
+            room,
+            session_pubkey: adapter.sessionPubkey,
+            agents_at_join: adapter.agentCount,
+        });
+    } catch (err) {
+        mcpLog('error', 'adapter_create_failed', {
+            error: String(err),
+        });
+        throw err;
+    }
 
     const server = new Server(
         {
@@ -454,6 +536,11 @@ export async function runMcpServer() {
     // directly to attributes on the <channel> tag, so `from` becomes
     // `from="..."` in the event Claude sees.
     adapter.onMessage((msg) => {
+        mcpLog('info', 'inbound_message', {
+            from: msg.from.slice(0, 16),
+            topic: msg.topic,
+            body_len: msg.body.length,
+        });
         server
             .notification({
                 method: 'notifications/claude/channel',
@@ -471,10 +558,26 @@ export async function runMcpServer() {
                     },
                 },
             })
-            .catch(() => {});
+            .then(() => {
+                mcpLog('debug', 'notification_sent', {
+                    kind: 'message',
+                    topic: msg.topic,
+                });
+            })
+            .catch((err) => {
+                mcpLog('error', 'notification_send_failed', {
+                    kind: 'message',
+                    error: String(err),
+                });
+            });
     });
 
     adapter.onDirect((msg) => {
+        mcpLog('info', 'inbound_direct', {
+            from: msg.from.slice(0, 16),
+            target: msg.target.slice(0, 16),
+            body_len: msg.body.length,
+        });
         server
             .notification({
                 method: 'notifications/claude/channel',
@@ -493,21 +596,41 @@ export async function runMcpServer() {
                     },
                 },
             })
-            .catch(() => {});
+            .then(() => {
+                mcpLog('debug', 'notification_sent', { kind: 'direct' });
+            })
+            .catch((err) => {
+                mcpLog('error', 'notification_send_failed', {
+                    kind: 'direct',
+                    error: String(err),
+                });
+            });
     });
 
     const transport = new StdioServerTransport();
-    await server.connect(transport);
+    try {
+        await server.connect(transport);
+        mcpLog('info', 'mcp_transport_connected');
+    } catch (err) {
+        mcpLog('error', 'mcp_transport_connect_failed', {
+            error: String(err),
+        });
+        throw err;
+    }
 
-    const shutdown = () => {
+    const shutdown = (signal: string) => {
+        mcpLog('info', 'shutdown', { signal });
         try {
             adapter.close();
         } finally {
             process.exit(0);
         }
     };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('exit', (code) => {
+        mcpLog('info', 'process_exit', { code });
+    });
 }
 
 function textContent(text: string) {
