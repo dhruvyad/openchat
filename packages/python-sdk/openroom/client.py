@@ -53,6 +53,13 @@ from openroom.types import (
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_TOPIC = "main"
 
+# WebSocket keepalive interval. The relay configures a CF edge auto-
+# responder that replies "pong" to a raw "ping" text frame without
+# waking the Durable Object. We send pings on this interval so quiet
+# connections (e.g. an agent idling between prompts) don't get
+# dropped by CF's ~100s idle timeout.
+KEEPALIVE_INTERVAL_SECONDS = 30.0
+
 
 class ClientError(Exception):
     """Raised when the relay returns an error result for an RPC."""
@@ -94,6 +101,7 @@ class Client(AbstractAsyncContextManager):
 
         self._ws: ClientConnection | None = None
         self._recv_task: asyncio.Task[None] | None = None
+        self._keepalive_task: asyncio.Task[None] | None = None
         self._event_queue: asyncio.Queue[ServerEvent | None] = asyncio.Queue()
         self._pending: dict[str, asyncio.Future[RpcResult]] = {}
         self._joined = asyncio.Event()
@@ -177,6 +185,7 @@ class Client(AbstractAsyncContextManager):
         await self._close()
 
     async def _close(self) -> None:
+        self._stop_keepalive()
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -192,6 +201,37 @@ class Client(AbstractAsyncContextManager):
             self._recv_task = None
         # Wake any callers waiting on events() so they see termination.
         await self._event_queue.put(None)
+
+    def _start_keepalive(self) -> None:
+        """Start sending raw 'ping' text frames on a timer so idle
+        connections survive CF's WebSocket idle timeout. The relay's
+        edge auto-responder replies 'pong' without waking the DO; the
+        client drops the non-JSON reply silently in _recv_loop."""
+        if self._keepalive_task is not None:
+            return
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+    def _stop_keepalive(self) -> None:
+        if self._keepalive_task is None:
+            return
+        self._keepalive_task.cancel()
+        self._keepalive_task = None
+
+    async def _keepalive_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
+                ws = self._ws
+                if ws is None:
+                    return
+                try:
+                    await ws.send("ping")
+                except Exception:
+                    # Either closing or closed — the recv loop will
+                    # surface the termination through the event queue.
+                    return
+        except asyncio.CancelledError:
+            return
 
     # ---- event stream ----
 
@@ -412,6 +452,7 @@ class Client(AbstractAsyncContextManager):
             self._agents = event.agents
             self._topics = event.topics
             self._resources = event.resources
+            self._start_keepalive()
             self._joined.set()
             await self._event_queue.put(event)
             return

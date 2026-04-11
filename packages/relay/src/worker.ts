@@ -112,6 +112,17 @@ export class RoomDurableObject {
         this.store = new RoomStore(this.state.storage, this.logger);
         this.core = new RelayCore(this.makeHooks());
         this.initialized = this.initialize();
+
+        // Configure edge-level auto-responder for keepalive pings.
+        // Clients send raw text "ping" on a timer; the Cloudflare edge
+        // replies "pong" without waking the DO, which keeps the TCP
+        // connection warm past CF's ~100s idle-timeout threshold. Without
+        // this, a Claude MCP session sitting quietly between user
+        // prompts gets its WebSocket dropped, which the user observes as
+        // "Claude fell out of the room after a while."
+        this.state.setWebSocketAutoResponse(
+            new WebSocketRequestResponsePair('ping', 'pong')
+        );
     }
 
     /**

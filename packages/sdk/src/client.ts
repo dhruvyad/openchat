@@ -115,6 +115,14 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 5000;
 
+/** WebSocket keepalive interval in milliseconds. The relay configures
+ *  a CF edge auto-responder that replies "pong" to raw "ping" text
+ *  without waking the DO — we send these on a timer so quiet
+ *  connections don't get dropped by CF's ~100s idle timeout. 30s gives
+ *  us ~3 pings before any realistic idle window would trigger a close.
+ */
+const KEEPALIVE_INTERVAL_MS = 30_000;
+
 export interface ClientKeypair {
     privateKey: Uint8Array;
     publicKey: Uint8Array;
@@ -139,6 +147,7 @@ export class Client {
     private joinResolve?: () => void;
     private joinReject?: (err: Error) => void;
     private pending = new Map<string, PendingRequest>();
+    private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
     // Cached snapshot of room state, updated by joined / agents_changed /
     // topic_changed / resource_changed events. The adapter (and any tool
     // that wants a read without hitting the relay) reads from these.
@@ -167,6 +176,7 @@ export class Client {
             this.opts.onError?.(msg);
         });
         this.ws.addEventListener('close', () => {
+            this.stopKeepalive();
             for (const pending of this.pending.values()) {
                 clearTimeout(pending.timer);
                 pending.reject(new Error('connection closed'));
@@ -223,6 +233,7 @@ export class Client {
                 this._agents = event.agents;
                 this._topics = event.topics;
                 this._resources = event.resources ?? [];
+                this.startKeepalive();
                 this.joinResolve?.();
                 return;
             case 'message':
@@ -293,6 +304,39 @@ export class Client {
         clearTimeout(pending.timer);
         this.pending.delete(id);
         pending.resolve(event);
+    }
+
+    /** Start a WebSocket keepalive: send the raw text "ping" on a
+     *  30s interval. The relay's CF edge auto-responds "pong" without
+     *  waking the Durable Object, which keeps CF's ~100s idle timeout
+     *  from dropping quiet connections (e.g. an MCP server waiting for
+     *  Claude to do something). The "pong" reply comes back on the
+     *  message channel; handleServerEvent's JSON.parse silently drops
+     *  it since "pong" isn't a valid ServerEvent. */
+    private startKeepalive(): void {
+        if (this.keepaliveTimer !== null) return;
+        this.keepaliveTimer = setInterval(() => {
+            if (this.ws.readyState !== this.wsCtor.OPEN) return;
+            try {
+                this.ws.send('ping');
+            } catch {
+                // ws layer may be mid-close; next close event cleans up
+            }
+        }, KEEPALIVE_INTERVAL_MS);
+        // Don't keep the Node event loop alive on the interval alone.
+        // The `ws` package's timers are already unref'd by default, but
+        // `setInterval` in Node returns a Timeout object that has an
+        // `unref` method. Browsers don't have this API; guard accordingly.
+        const timer = this.keepaliveTimer as unknown as {
+            unref?: () => void;
+        };
+        if (typeof timer.unref === 'function') timer.unref();
+    }
+
+    private stopKeepalive(): void {
+        if (this.keepaliveTimer === null) return;
+        clearInterval(this.keepaliveTimer);
+        this.keepaliveTimer = null;
     }
 
     private async request<T extends ServerEvent>(
