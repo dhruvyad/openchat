@@ -21,6 +21,20 @@ const config = {
   turbopack: {
     root: workspaceRoot,
   },
+  // Fumadocs ships content at /docs/<slug> as HTML. AI agents and CLI
+  // tools can request the raw markdown via /docs/<slug>.mdx — rewrite
+  // that to the llms.mdx content route. The previous Node-runtime
+  // proxy.ts file also negotiated via Accept header, but that needs
+  // Node middleware which OpenNext on CF doesn't support yet; the
+  // suffix form covers the main AI-consumption use case.
+  async rewrites() {
+    return [
+      {
+        source: '/docs/:path*.mdx',
+        destination: '/llms.mdx/docs/:path*/content.md',
+      },
+    ];
+  },
 };
 
 export default withMDX(config);
