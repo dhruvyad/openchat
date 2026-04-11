@@ -580,20 +580,30 @@ async function cmdClaude(args: ParsedArgs) {
     // interacts directly. Forward signals so Ctrl-C in this parent process
     // reaches the claude child.
     //
-    // IMPORTANT: --dangerously-load-development-channels server:<name> is
-    // the flag that tells Claude Code to route the MCP server's
-    // `notifications/claude/channel` emissions into the conversation as
-    // <channel> events. Without this flag, Claude Code treats our server
-    // as a regular MCP server and silently drops the notifications —
-    // `claude mcp list` shows ✓ Connected but inbound room messages never
-    // reach the model. wahooks-cli (cli/cmd/claude.go) and noclick do
-    // the same thing. The "dangerously" prefix is because the channel
-    // lets an external source inject content into the conversation
-    // without prior user approval, which the user opts into by running
-    // `openroom claude` in the first place.
+    // Two dangerous flags are required, matching wahooks-cli and noclick:
+    //
+    //   --dangerously-load-development-channels server:<name>
+    //     Routes the MCP server's `notifications/claude/channel`
+    //     emissions into the conversation as <channel> events. Without
+    //     this, Claude Code treats our server as a regular MCP server
+    //     and silently drops the notifications — `claude mcp list`
+    //     shows ✓ Connected but inbound room messages never reach the
+    //     model.
+    //
+    //   --dangerously-skip-permissions
+    //     Auto-approves tool calls without interactive confirmation.
+    //     Necessary for an agent that's supposed to reply autonomously
+    //     to inbound room messages — otherwise every send_message
+    //     would block waiting for the local user to click "approve",
+    //     which defeats the point of push-based coordination.
+    //
+    // The user opts into both by running `openroom claude` in the
+    // first place; there's no way to participate in a room without
+    // outbound tool calls and inbound channel pushes.
     const claudeArgs = [
         '--dangerously-load-development-channels',
         `server:${MCP_SERVER_NAME}`,
+        '--dangerously-skip-permissions',
     ];
     const child = spawn('claude', claudeArgs, { stdio: 'inherit' });
 
