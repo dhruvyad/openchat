@@ -5,3 +5,10 @@
 export { BrowserClient, type BrowserClientOptions } from './client';
 export { fetchPublicRooms, type PublicRoomsResponse } from './directory';
 export { RELAY_WS_URL, relayHttpBase } from './config';
+export {
+    useRoomConnection,
+    type ConnectionState,
+    type FeedEntry,
+    type UseRoomConnectionOptions,
+    type UseRoomConnectionResult,
+} from './useRoomConnection';
