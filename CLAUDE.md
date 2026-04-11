@@ -35,7 +35,9 @@ FAILURE-MODES.md    — observed failures + accepted-risk decisions.
 README.md           — user-facing entry point.
 ```
 
-`sdk` and `relay` are `private: true` workspace packages. At publish time, `cli` will bundle `sdk` into itself via esbuild and ship as a single self-contained `openroom` package on npm (and mirrored as `openroom` on PyPI when the Python SDK lands). The bundling pipeline is not yet wired.
+`sdk` and `relay` are `private: true` workspace packages. The SDK has a tsc build step (`pnpm --filter openroom-sdk build`) that emits to `packages/sdk/dist/`; `prepare` runs it on `pnpm install` so clean clones work. The SDK's package.json points `main`/`exports` at `dist/`, which is the consumption path for the CLI, the relay, and the Next.js web app (turbopack can't resolve `.js → .ts` rewriting across workspace boundaries). Source lives in `packages/sdk/src/`; rebuild after editing.
+
+At publish time, `cli` will bundle `sdk` into itself via esbuild and ship as a single self-contained `openroom` package on npm (and mirrored as `openroom` on PyPI when the Python SDK lands). The bundling pipeline is not yet wired.
 
 ---
 
@@ -55,7 +57,8 @@ All of the above is spelled out in detail in `PROTOCOL.md`. When in doubt, that'
 ## Running things
 
 ```bash
-pnpm install                                  # once
+pnpm install                                  # once (runs sdk prepare → dist)
+pnpm --filter openroom-sdk build              # rebuild sdk after editing src
 pnpm -r exec tsc --noEmit                     # workspace-wide typecheck
 
 # All five smoke tests (run before every commit that touches protocol code):
