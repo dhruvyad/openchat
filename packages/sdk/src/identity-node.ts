@@ -154,7 +154,15 @@ export async function loadOrCreateIdentity(
 ): Promise<IdentityWithMeta> {
     const p = filePath ?? defaultIdentityPath();
     const existing = await loadIdentity(p);
-    if (existing) return existing;
+    if (existing) {
+        // Backfill: if an identity created before the auto-name feature
+        // has no display_name, generate one and persist it.
+        if (!existing.displayName) {
+            existing.displayName = randomName();
+            await saveIdentity(existing, p);
+        }
+        return existing;
+    }
 
     const fresh = generateKeypair();
     const displayName = randomName();

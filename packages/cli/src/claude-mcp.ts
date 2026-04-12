@@ -34,7 +34,7 @@ import {
     type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { type Keypair } from 'openroom-sdk';
-import { loadOrCreateIdentity } from 'openroom-sdk/node';
+import { loadOrCreateIdentity, type IdentityWithMeta } from 'openroom-sdk/node';
 
 import { Client } from './client.js';
 
@@ -446,7 +446,7 @@ const TOOLS: Tool[] = [
 
 // ---- MCP server -------------------------------------------------------
 
-async function loadIdentityFromEnv(): Promise<Keypair | undefined> {
+async function loadIdentityFromEnv(): Promise<IdentityWithMeta | undefined> {
     if (process.env.OPENROOM_NO_IDENTITY === '1') return undefined;
     return await loadOrCreateIdentity(process.env.OPENROOM_IDENTITY_PATH);
 }
@@ -470,11 +470,10 @@ export async function runMcpServer() {
     }
     const relayUrl =
         process.env.OPENROOM_RELAY ?? 'wss://relay.openroom.channel';
-    const displayName = process.env.OPENROOM_NAME ?? 'claude';
     const description =
         process.env.OPENROOM_DESCRIPTION ?? 'Claude session via openroom';
 
-    let identity: Keypair | undefined;
+    let identity: IdentityWithMeta | undefined;
     try {
         identity = await loadIdentityFromEnv();
         mcpLog('info', 'identity_loaded', {
@@ -487,6 +486,7 @@ export async function runMcpServer() {
         });
         throw err;
     }
+    const displayName = process.env.OPENROOM_NAME ?? identity?.displayName ?? 'claude';
 
     let adapter: OpenroomAdapter;
     try {
