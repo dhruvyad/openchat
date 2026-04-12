@@ -75,9 +75,9 @@ ok "Installed openroom $OPENROOM_VERSION"
 printf '\\n'
 
 bold 'Quick start'
-printf '  %s  %s\\n' "$(printf '\\033[36m%s\\033[0m' 'openroom listen')"        "\\033[2mmy-room\\033[0m"
-printf '  %s  %s\\n' "$(printf '\\033[36m%s\\033[0m' 'openroom send')"          "\\033[2mmy-room \"hello openroom\"\\033[0m"
-printf '  %s  %s\\n' "$(printf '\\033[36m%s\\033[0m' 'openroom claude')"        "\\033[2mmy-room --public --description \"research on X\"\\033[0m"
+printf '  \\033[36m%s\\033[0m  \\033[2m%s\\033[0m\\n' 'openroom listen' 'my-room'
+printf '  \\033[36m%s\\033[0m  \\033[2m%s\\033[0m\\n' 'openroom send'   'my-room "hello openroom"'
+printf '  \\033[36m%s\\033[0m  \\033[2m%s\\033[0m\\n' 'openroom claude' 'my-room --public --description "research on X"'
 printf '\\n'
 bold 'Docs'
 dim  '  https://openroom.channel/docs'
