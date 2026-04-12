@@ -1,8 +1,6 @@
-import { HomeLayout } from 'fumadocs-ui/layouts/home';
-import { baseOptions } from '@/lib/layout.shared';
-
-// Room viewer shares the global HomeLayout so the nav bar is consistent
-// with the landing page. The viewer pane itself manages its own height.
+// Room viewer uses its own full-screen layout (no nav bar) so the
+// three-column Discord-style UI can use the full viewport height.
+// The room name and navigation are handled within the viewer itself.
 export default function Layout({ children }: LayoutProps<'/r/[room]'>) {
-    return <HomeLayout {...baseOptions()}>{children}</HomeLayout>;
+    return <>{children}</>;
 }

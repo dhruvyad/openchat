@@ -16,6 +16,7 @@ import {
     toBase64Url,
     type Keypair,
 } from './crypto.js';
+import NAMES from './names.json' with { type: 'json' };
 
 const ED25519_KEY_LENGTH = 32;
 
@@ -23,6 +24,11 @@ interface StoredIdentity {
     kind: 'ed25519';
     private_key: string;
     public_key: string;
+    display_name?: string;
+}
+
+export interface IdentityWithMeta extends Keypair {
+    displayName?: string;
 }
 
 /** Default on-disk location for the identity keypair. */
@@ -39,7 +45,7 @@ export function defaultIdentityPath(): string {
  */
 export async function loadIdentity(
     filePath?: string
-): Promise<Keypair | null> {
+): Promise<IdentityWithMeta | null> {
     const p = filePath ?? defaultIdentityPath();
     let raw: string;
     try {
@@ -91,7 +97,11 @@ export async function loadIdentity(
         );
     }
 
-    return { privateKey, publicKey };
+    return {
+        privateKey,
+        publicKey,
+        displayName: stored.display_name ?? undefined,
+    };
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -109,7 +119,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * (e.g. an older 0644 file from a backup) lands the final inode at 0600.
  */
 export async function saveIdentity(
-    keypair: Keypair,
+    keypair: Keypair | IdentityWithMeta,
     filePath?: string
 ): Promise<void> {
     const p = filePath ?? defaultIdentityPath();
@@ -121,6 +131,9 @@ export async function saveIdentity(
         private_key: toBase64Url(keypair.privateKey),
         public_key: toBase64Url(keypair.publicKey),
     };
+    if ('displayName' in keypair && keypair.displayName) {
+        stored.display_name = keypair.displayName;
+    }
     const data = JSON.stringify(stored, null, 2);
     const tmp = `${p}.tmp.${process.pid}.${Date.now()}`;
     await fs.writeFile(tmp, data, { mode: 0o600 });
@@ -138,12 +151,13 @@ export async function saveIdentity(
  */
 export async function loadOrCreateIdentity(
     filePath?: string
-): Promise<Keypair> {
+): Promise<IdentityWithMeta> {
     const p = filePath ?? defaultIdentityPath();
     const existing = await loadIdentity(p);
     if (existing) return existing;
 
     const fresh = generateKeypair();
+    const displayName = randomName();
     const dir = path.dirname(p);
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 
@@ -151,6 +165,7 @@ export async function loadOrCreateIdentity(
         kind: 'ed25519',
         private_key: toBase64Url(fresh.privateKey),
         public_key: toBase64Url(fresh.publicKey),
+        display_name: displayName,
     };
     const data = JSON.stringify(stored, null, 2);
 
@@ -165,7 +180,7 @@ export async function loadOrCreateIdentity(
             await handle.close();
         }
         await fs.chmod(p, 0o600);
-        return fresh;
+        return { ...fresh, displayName };
     } catch (err) {
         if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
             const winning = await loadIdentity(p);
@@ -173,4 +188,10 @@ export async function loadOrCreateIdentity(
         }
         throw err;
     }
+}
+
+function randomName(): string {
+    const first = NAMES.first[Math.floor(Math.random() * NAMES.first.length)]!;
+    const last = NAMES.last[Math.floor(Math.random() * NAMES.last.length)]!;
+    return `${first} ${last}`;
 }

@@ -108,6 +108,10 @@ export function useRoomConnection(
             onAgentsChanged: (event) => {
                 setAgents([...event.agents]);
             },
+            onError: (reason) => {
+                if (cancelled) return;
+                setError(reason);
+            },
             onTopicChanged: () => {
                 // Rebuild from the client's cached snapshot — cheap and
                 // lets us stay authoritative even if events arrive out
@@ -116,10 +120,6 @@ export function useRoomConnection(
             },
             onResourceChanged: () => {
                 setResources([...client.cachedResources]);
-            },
-            onError: (reason) => {
-                if (cancelled) return;
-                setError(reason);
             },
         });
         clientRef.current = client;

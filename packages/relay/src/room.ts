@@ -710,6 +710,28 @@ export class RelayCore {
 
         agent.sessionPubkey = envelope.from;
         agent.displayName = envelope.payload.display_name;
+        // Roman-numeral dedup: if another agent in this room shares the
+        // same attested identity AND the same base display name, suffix
+        // this one with (II), (III), etc. — like Henry V.
+        if (agent.identityPubkey && agent.displayName) {
+            const baseName = agent.displayName;
+            let ordinal = 1;
+            for (const other of room.agents.values()) {
+                if (
+                    other.sessionPubkey !== agent.sessionPubkey &&
+                    other.identityPubkey === agent.identityPubkey &&
+                    other.joined &&
+                    other.displayName &&
+                    (other.displayName === baseName ||
+                        other.displayName.startsWith(baseName + ' ('))
+                ) {
+                    ordinal++;
+                }
+            }
+            if (ordinal > 1) {
+                agent.displayName = `${baseName} (${toRoman(ordinal)})`;
+            }
+        }
         agent.viewer = envelope.payload.viewer === true;
         // Cap description to bound per-ws attachment size so it survives
         // hibernation via ws.serializeAttachment (2 KB hard limit).
@@ -1795,4 +1817,23 @@ export class RelayCore {
     roomCount(): number {
         return this.rooms.size;
     }
+}
+
+// ── Roman numeral formatting for display name dedup ──────────────
+
+const ROMAN_PAIRS: [number, string][] = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+    [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+];
+
+function toRoman(n: number): string {
+    let result = '';
+    for (const [value, numeral] of ROMAN_PAIRS) {
+        while (n >= value) {
+            result += numeral;
+            n -= value;
+        }
+    }
+    return result;
 }

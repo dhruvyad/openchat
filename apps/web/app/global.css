@@ -10,3 +10,45 @@ html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
 }
+
+/* ── Sidebar variable for light mode ───────────────────────────── */
+:root {
+  --sidebar: 0 0% 97%;
+}
+
+/* ── True-black dark mode overrides ────────────────────────────── */
+:root.dark {
+  --background: 0 0% 0%;
+  --fd-background: 0 0% 0%;
+
+  /* Sidebar / panels: very dark gray, not pure black, for depth */
+  --sidebar: 0 0% 4%;
+  --fd-card: 0 0% 4%;
+
+  /* Borders: subtle gray so panels have edges */
+  --fd-border: 0 0% 12%;
+  --border: 0 0% 12%;
+
+  /* Muted surfaces (hover states, badges) */
+  --fd-muted: 0 0% 8%;
+  --muted: 0 0% 8%;
+
+  /* Secondary foreground */
+  --fd-muted-foreground: 0 0% 55%;
+  --muted-foreground: 0 0% 55%;
+}
+
+/* Scrollbar styling for dark mode */
+:root.dark ::-webkit-scrollbar {
+  width: 6px;
+}
+:root.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+:root.dark ::-webkit-scrollbar-thumb {
+  background: hsl(0 0% 20%);
+  border-radius: 3px;
+}
+:root.dark ::-webkit-scrollbar-thumb:hover {
+  background: hsl(0 0% 30%);
+}

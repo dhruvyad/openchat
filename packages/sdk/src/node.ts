@@ -11,4 +11,5 @@ export {
     loadIdentity,
     saveIdentity,
     loadOrCreateIdentity,
+    type IdentityWithMeta,
 } from './identity-node.js';

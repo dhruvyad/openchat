@@ -20,7 +20,13 @@ import {
     type Keypair,
     type UnannouncePayload,
 } from 'openroom-sdk';
-import { defaultIdentityPath, loadOrCreateIdentity } from 'openroom-sdk/node';
+import {
+    defaultIdentityPath,
+    loadIdentity,
+    loadOrCreateIdentity,
+    saveIdentity,
+    type IdentityWithMeta,
+} from 'openroom-sdk/node';
 import { Client } from './client.js';
 import { runMcpServer } from './claude-mcp.js';
 import {
@@ -64,7 +70,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     const topics: string[] = [];
     const flags = new Set<string>();
     const values = new Map<string, string>();
-    const VALUE_FLAGS = new Set(['description', 'authority']);
+    const VALUE_FLAGS = new Set(['description', 'authority', 'display-name']);
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i]!;
         if (arg === '--topic' || arg === '-t') {
@@ -173,6 +179,7 @@ function printUsage() {
             [
                 'print or create your long-lived',
                 'identity key under ~/.openroom.',
+                `${dim('set-name <name>')} to set display name.`,
             ],
         ],
         [
@@ -244,9 +251,23 @@ function printUsage() {
     console.log();
 }
 
-async function getIdentity(args: ParsedArgs): Promise<Keypair | undefined> {
+async function getIdentity(args: ParsedArgs): Promise<IdentityWithMeta | undefined> {
     if (args.flags.has('no-identity')) return undefined;
     return await loadOrCreateIdentity(IDENTITY_PATH_ENV);
+}
+
+/** Resolve display name: --display-name > OPENROOM_NAME > identity file > fallback */
+function resolveDisplayName(
+    args: ParsedArgs,
+    identity: IdentityWithMeta | undefined,
+    fallback: string
+): string {
+    return (
+        args.values.get('display-name') ??
+        DEFAULT_NAME ??
+        identity?.displayName ??
+        fallback
+    );
 }
 
 async function cmdSend(args: ParsedArgs) {
@@ -258,11 +279,12 @@ async function cmdSend(args: ParsedArgs) {
     }
     const topic = args.topics[0] ?? MAIN_TOPIC;
     const identity = await getIdentity(args);
+    const displayName = resolveDisplayName(args, identity, 'sender');
 
     const client = new Client({
         relayUrl: RELAY_URL,
         room,
-        displayName: DEFAULT_NAME ?? 'sender',
+        displayName,
         identityKeypair: identity,
         onError: (reason) => console.error(`${tag('err')} ${red(reason)}`),
     });
@@ -293,12 +315,13 @@ async function cmdListen(args: ParsedArgs) {
     }
 
     const identity = await getIdentity(args);
+    const displayName = resolveDisplayName(args, identity, 'listener');
     let agentCount = 0;
 
     const client = new Client({
         relayUrl: RELAY_URL,
         room,
-        displayName: DEFAULT_NAME ?? 'listener',
+        displayName,
         identityKeypair: identity,
         onMessage: (event) => {
             const env = event.envelope;
@@ -381,20 +404,33 @@ async function cmdListen(args: ParsedArgs) {
     process.on('SIGTERM', shutdown);
 }
 
-async function cmdIdentity(_args: ParsedArgs) {
+async function cmdIdentity(args: ParsedArgs) {
+    const [subcommand, ...subArgs] = args.positional;
+
+    if (subcommand === 'set-name') {
+        const name = subArgs.join(' ').trim();
+        if (!name) {
+            console.error('usage: openroom identity set-name <display-name>');
+            process.exit(1);
+        }
+        const storedAt = IDENTITY_PATH_ENV ?? defaultIdentityPath();
+        const identity = await loadOrCreateIdentity(storedAt);
+        identity.displayName = name;
+        await saveIdentity(identity, storedAt);
+        console.log(`${tag('ok')} display name set to ${bold(name)}`);
+        return;
+    }
+
     const keypair = await loadOrCreateIdentity(IDENTITY_PATH_ENV);
     const storedAt = IDENTITY_PATH_ENV ?? defaultIdentityPath();
     const pubkey = toBase64Url(keypair.publicKey);
+    const lines = [
+        `${dim('pubkey ')} ${cyan(pubkey)}`,
+        `${dim('name   ')} ${keypair.displayName ? bold(keypair.displayName) : dim('(not set — use `openroom identity set-name <name>`)')}`,
+        `${dim('file   ')} ${dim(storedAt)}`,
+    ];
     console.log();
-    console.log(
-        box({
-            title: bold('identity'),
-            lines: [
-                `${dim('pubkey ')} ${cyan(pubkey)}`,
-                `${dim('file   ')} ${dim(storedAt)}`,
-            ],
-        })
-    );
+    console.log(box({ title: bold('identity'), lines }));
 }
 
 // Must match the `name:` on the Server() constructor in claude-mcp.ts,
