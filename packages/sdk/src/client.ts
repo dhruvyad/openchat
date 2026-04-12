@@ -95,6 +95,9 @@ export interface ClientOptions {
      * peers can recognize this session as the same identity across
      * reconnects. */
     identityKeypair?: Keypair;
+    /** Extra feature tags to advertise on join, e.g. `["agent:claude-code","model:opus-4.6"]`.
+     * Merged with the default `["openroom/1"]` features. */
+    features?: string[];
     /** Join as a read-only viewer. The relay tags the agent in its
      * AgentSummary and rejects write operations. Defaults to false. */
     viewer?: boolean;
@@ -550,7 +553,7 @@ export class Client {
             nonce,
             display_name: this.opts.displayName,
             description: this.opts.description,
-            features: ['openroom/1'],
+            features: ['openroom/1', ...(this.opts.features ?? [])],
         };
         if (this.opts.viewer) payload.viewer = true;
         if (this.opts.identityKeypair) {

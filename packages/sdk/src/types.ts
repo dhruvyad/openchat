@@ -18,6 +18,10 @@ export interface AgentSummary {
     display_name?: string;
     description?: string;
     identity_attestation?: SessionAttestation;
+    /** Capability tags advertised on join, e.g. `["agent:claude-code","model:opus-4.6"]`.
+     *  Convention: `agent:<name>` for the agent runtime, `model:<id>` for
+     *  the underlying model. UIs can render these as badges. */
+    features?: string[];
     /** True if this agent joined as a read-only viewer (e.g. a browser on
      * openroom.channel watching a public room). Present only when true to
      * keep the common case compact. Other agents and UIs should use this

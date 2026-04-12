@@ -56,6 +56,8 @@ interface Agent {
     /** names of topics this agent currently subscribes to. Tracked here so
      *  it can be serialized into ws attachment for hibernation survival. */
     subscribedTopics: Set<string>;
+    /** Feature tags advertised on join, e.g. ["agent:claude-code","model:opus-4.6"] */
+    features?: string[];
     /** Read-only viewer. Relay rejects send / direct / create_topic /
      *  resource_put from these. Surfaced in AgentSummary so other agents
      *  and UIs can separate participants from observers. */
@@ -107,6 +109,7 @@ export interface AgentAttachment {
     rateTokens: number;
     rateLastRefillMs: number;
     subscribedTopics: string[];
+    features?: string[];
     /** Read-only viewer flag. Omitted when false to keep the attachment
      *  compact for the common case. */
     viewer?: boolean;
@@ -406,6 +409,7 @@ export class RelayCore {
             rateTokens: attachment.rateTokens,
             rateLastRefillMs: attachment.rateLastRefillMs,
             subscribedTopics: new Set(),
+            features: attachment.features,
             viewer: attachment.viewer === true,
         };
 
@@ -439,6 +443,7 @@ export class RelayCore {
             rateLastRefillMs: agent.rateLastRefillMs,
             subscribedTopics: Array.from(agent.subscribedTopics),
         };
+        if (agent.features?.length) attachment.features = agent.features;
         if (agent.viewer) attachment.viewer = true;
         return attachment;
     }
@@ -732,6 +737,9 @@ export class RelayCore {
                 agent.displayName = `${baseName} (${toRoman(ordinal)})`;
             }
         }
+        agent.features = Array.isArray(envelope.payload.features)
+            ? envelope.payload.features.filter((f: unknown) => typeof f === 'string').slice(0, 20)
+            : undefined;
         agent.viewer = envelope.payload.viewer === true;
         // Cap description to bound per-ws attachment size so it survives
         // hibernation via ws.serializeAttachment (2 KB hard limit).
@@ -1461,6 +1469,7 @@ export class RelayCore {
                     description: a.description,
                     identity_attestation: a.identityAttestation,
                 };
+                if (a.features?.length) summary.features = a.features;
                 if (a.viewer) summary.viewer = true;
                 return summary;
             });

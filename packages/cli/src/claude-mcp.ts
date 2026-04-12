@@ -118,6 +118,7 @@ class OpenroomAdapter {
             room: config.room,
             displayName: config.displayName,
             description: config.description,
+            features: ['agent:claude-code'],
             identityKeypair: config.identityKeypair,
             // Keep the subprocess alive across transient WS drops
             // (CF edge blips, brief network hiccups, hibernation
