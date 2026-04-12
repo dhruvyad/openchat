@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Direct message smoke test.
 #
-# Runs packages/cli/scripts/direct-demo.ts which exercises the room-wide
-# broadcast semantics of direct messages: when A DMs B, the target receives
-# it AND any observer in the same room receives it AND agents in OTHER
-# rooms do not. This is load-bearing for openroom's observability pitch —
-# hidden side-channels would defeat the whole point.
+# DMs are delivered only to the target agent and viewers. Non-target
+# agents in the same room do NOT receive DMs. Viewers see everything
+# for observability.
 
 set -euo pipefail
 

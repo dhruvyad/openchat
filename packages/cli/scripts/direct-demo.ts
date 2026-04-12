@@ -1,14 +1,13 @@
 // Direct message smoke test.
 //
-// openroom DMs are NOT private — the target field is a UI hint, not a
-// routing constraint. Every agent in the room receives the direct_message
-// event. This test proves exactly that: when A DMs B, a third observer C
-// in the same room must also receive the event. DMs to cross-room targets
-// or offline targets are rejected.
-//
-// This visibility is intentional: viewers and researchers must be able to
-// see all coordination happening in a room. Hidden side-channels would
-// defeat openroom's observability pitch.
+// DMs are delivered only to the target agent and any viewers in the room.
+// Non-target, non-viewer agents do NOT receive DMs. This test proves:
+//   - A DMs B → B receives it
+//   - A DMs B → viewer V receives it (observability)
+//   - A DMs B → non-target agent C does NOT receive it
+//   - A DMs B → agent D in a different room does NOT receive it
+//   - DM to a non-existent target is rejected
+//   - B can reply-DM to A
 
 import { generateKeypair } from 'openroom-sdk';
 import { Client } from '../src/client.js';
@@ -37,7 +36,8 @@ interface Inbox {
 function makeClient(
     room: string,
     label: string,
-    inbox: Inbox
+    inbox: Inbox,
+    opts?: { viewer?: boolean }
 ): Client {
     const kp = generateKeypair();
     return new Client(
@@ -45,6 +45,7 @@ function makeClient(
             relayUrl: RELAY_URL,
             room,
             displayName: label,
+            viewer: opts?.viewer,
             onMessage: (event) => {
                 inbox.topicMessages.push({
                     from: event.envelope.from,
@@ -69,39 +70,48 @@ async function run() {
     const bInbox: Inbox = { topicMessages: [], directs: [] };
     const cInbox: Inbox = { topicMessages: [], directs: [] };
     const dInbox: Inbox = { topicMessages: [], directs: [] };
+    const vInbox: Inbox = { topicMessages: [], directs: [] };
 
     const a = makeClient(ROOM_A, 'alice', aInbox);
     const b = makeClient(ROOM_A, 'bob', bInbox);
-    const c = makeClient(ROOM_A, 'carol-observer', cInbox);
+    const c = makeClient(ROOM_A, 'carol-bystander', cInbox);
     const d = makeClient(ROOM_B, 'dave-other-room', dInbox);
+    const v = makeClient(ROOM_A, 'viewer', vInbox, { viewer: true });
 
-    await Promise.all([a.connect(), b.connect(), c.connect(), d.connect()]);
+    await Promise.all([
+        a.connect(),
+        b.connect(),
+        c.connect(),
+        d.connect(),
+        v.connect(),
+    ]);
     await sleep(150);
 
     const bPubkey = b.sessionPubkey;
 
     // --- 1. A sends a DM to B. ---
-    await a.sendDirect(bPubkey, 'hello bob, just between us (kind of)');
+    await a.sendDirect(bPubkey, 'hello bob, private message');
     await sleep(200);
 
     pass(
-        '1 target B received the direct message',
+        '1 target B received the DM',
         bInbox.directs.length === 1 &&
-            bInbox.directs[0]!.body ===
-                'hello bob, just between us (kind of)' &&
-            bInbox.directs[0]!.target === bPubkey
+            bInbox.directs[0]!.body === 'hello bob, private message'
     );
 
     pass(
-        '1 observer C in the SAME room also received the direct message',
-        cInbox.directs.length === 1 &&
-            cInbox.directs[0]!.body ===
-                'hello bob, just between us (kind of)' &&
-            cInbox.directs[0]!.target === bPubkey
+        '1 viewer V received the DM (observability)',
+        vInbox.directs.length === 1 &&
+            vInbox.directs[0]!.body === 'hello bob, private message'
     );
 
     pass(
-        '1 sender A did NOT receive their own broadcast (ack is enough)',
+        '1 bystander C did NOT receive the DM',
+        cInbox.directs.length === 0
+    );
+
+    pass(
+        '1 sender A did NOT receive their own DM',
         aInbox.directs.length === 0
     );
 
@@ -110,7 +120,7 @@ async function run() {
         dInbox.directs.length === 0
     );
 
-    // --- 2. DM to a non-existent target in the same room is rejected. ---
+    // --- 2. DM to a non-existent target is rejected. ---
     let err: string | null = null;
     try {
         await a.sendDirect(
@@ -126,30 +136,40 @@ async function run() {
         err
     );
 
-    // Confirm B and C did NOT see the bogus DM.
+    // No one should have seen the rejected DM.
     pass(
-        '2 observers did not see the rejected DM',
-        bInbox.directs.length === 1 && cInbox.directs.length === 1
+        '2 no one saw the rejected DM',
+        bInbox.directs.length === 1 &&
+            cInbox.directs.length === 0 &&
+            vInbox.directs.length === 1
     );
 
-    // --- 3. B can reply via DM back to A, and A receives it. ---
-    await b.sendDirect(a.sessionPubkey, 'hi alice, and hi observers too');
+    // --- 3. B replies via DM to A. ---
+    await b.sendDirect(a.sessionPubkey, 'hi alice, got your message');
     await sleep(200);
+
     pass(
         '3 A received reply DM',
         aInbox.directs.length === 1 &&
-            aInbox.directs[0]!.body === 'hi alice, and hi observers too'
+            aInbox.directs[0]!.body === 'hi alice, got your message'
     );
+
     pass(
-        '3 observer C received reply DM',
-        cInbox.directs.length === 2 &&
-            cInbox.directs[1]!.body === 'hi alice, and hi observers too'
+        '3 viewer V received reply DM',
+        vInbox.directs.length === 2 &&
+            vInbox.directs[1]!.body === 'hi alice, got your message'
+    );
+
+    pass(
+        '3 bystander C still did NOT receive any DMs',
+        cInbox.directs.length === 0
     );
 
     a.leave();
     b.leave();
     c.leave();
     d.leave();
+    v.leave();
     await sleep(150);
     process.exit(process.exitCode ?? 0);
 }
