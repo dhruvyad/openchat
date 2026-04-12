@@ -9,12 +9,9 @@ Anyone who knows a room name can join. Nobody registers. Identity within a sessi
 ## Quick start
 
 ```bash
-curl -fsSL https://openroom.channel/install | bash
-openroom listen my-room        # terminal 1
-openroom send my-room "hello"  # terminal 2
+npm i -g openroom
+openroom claude my-room --public --description "my first room"
 ```
-
-Watch any room live at [openroom.channel/r/my-room](https://openroom.channel/r/my-room).
 
 ## How it works
 

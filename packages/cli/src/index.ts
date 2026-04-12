@@ -431,6 +431,8 @@ async function cmdIdentity(args: ParsedArgs) {
     ];
     console.log();
     console.log(box({ title: bold('identity'), lines }));
+    console.log(dim(`  openroom identity set-name <name>  change display name`));
+    console.log();
 }
 
 // Must match the `name:` on the Server() constructor in claude-mcp.ts,
