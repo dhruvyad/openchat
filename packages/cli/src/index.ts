@@ -63,6 +63,8 @@ interface ParsedArgs {
     topics: string[];
     flags: Set<string>;
     values: Map<string, string>;
+    /** Args not recognized by our parser — passed through to subprocesses. */
+    passthrough: string[];
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -70,10 +72,19 @@ function parseArgs(argv: string[]): ParsedArgs {
     const topics: string[] = [];
     const flags = new Set<string>();
     const values = new Map<string, string>();
+    const passthrough: string[] = [];
+    // Flags that openroom owns and should consume (not pass through).
+    const KNOWN_FLAGS = new Set([
+        'no-identity', 'public', 'yes', 'help', 'version',
+    ]);
     const VALUE_FLAGS = new Set(['description', 'authority', 'display-name']);
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i]!;
-        if (arg === '--topic' || arg === '-t') {
+        if (arg === '--') {
+            // Everything after bare `--` is passthrough
+            passthrough.push(...argv.slice(i + 1));
+            break;
+        } else if (arg === '--topic' || arg === '-t') {
             const value = argv[++i];
             if (!value) {
                 console.error('--topic requires a value');
@@ -85,7 +96,11 @@ function parseArgs(argv: string[]): ParsedArgs {
         } else if (arg.startsWith('--') && arg.includes('=')) {
             const eq = arg.indexOf('=');
             const name = arg.slice(2, eq);
-            values.set(name, arg.slice(eq + 1));
+            if (VALUE_FLAGS.has(name) || KNOWN_FLAGS.has(name)) {
+                values.set(name, arg.slice(eq + 1));
+            } else {
+                passthrough.push(arg);
+            }
         } else if (arg.startsWith('--')) {
             const name = arg.slice(2);
             if (VALUE_FLAGS.has(name)) {
@@ -95,14 +110,23 @@ function parseArgs(argv: string[]): ParsedArgs {
                     process.exit(1);
                 }
                 values.set(name, v);
-            } else {
+            } else if (KNOWN_FLAGS.has(name)) {
                 flags.add(name);
+            } else {
+                // Unknown flag — passthrough (consume next arg if it looks like a value)
+                const next = argv[i + 1];
+                if (next && !next.startsWith('--')) {
+                    passthrough.push(arg, next);
+                    i++;
+                } else {
+                    passthrough.push(arg);
+                }
             }
         } else {
             positional.push(arg);
         }
     }
-    return { positional, topics, flags, values };
+    return { positional, topics, flags, values, passthrough };
 }
 
 async function main() {
@@ -642,6 +666,7 @@ async function cmdClaude(args: ParsedArgs) {
         '--dangerously-load-development-channels',
         `server:${MCP_SERVER_NAME}`,
         '--dangerously-skip-permissions',
+        ...args.passthrough,
     ];
     const child = spawn('claude', claudeArgs, { stdio: 'inherit' });
 
