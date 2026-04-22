@@ -171,6 +171,11 @@ export interface AnnouncementSummary {
     announcer_identity?: string;
     announced_at: number;
     expires_at: number;
+    /** Live stats pushed by the RoomDO (may be stale by up to 60s). */
+    agent_count?: number;
+    viewer_count?: number;
+    message_count?: number;
+    last_activity_at?: number;
 }
 
 // ----- relay → client events -----

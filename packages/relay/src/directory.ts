@@ -27,6 +27,7 @@ export interface DirectoryEnv {
 }
 
 const ANNOUNCEMENT_KEY_PREFIX = 'announcement:';
+const STATS_KEY_PREFIX = 'stats:';
 const SCHEMA_VERSION = 1;
 const MAX_DESCRIPTION_LENGTH = 512;
 const MAX_ROOM_NAME_LENGTH = 128;
@@ -42,6 +43,13 @@ interface StoredAnnouncement {
     announcer_identity?: string;
     announced_at: number;
     expires_at: number;
+}
+
+interface RoomStats {
+    agent_count: number;
+    viewer_count: number;
+    message_count: number;
+    last_activity_at: number;
 }
 
 /**
@@ -184,18 +192,33 @@ export class DirectoryDurableObject {
             return this.handleWrite(request);
         }
 
+        // Internal endpoint: RoomDO pushes live stats here.
+        if (request.method === 'POST' && url.pathname === '/__internal/room-stats') {
+            return this.handleStatsUpdate(request);
+        }
+
         return new Response('not found', { status: 404 });
     }
 
     private async listPublicRooms(): Promise<Response> {
-        const entries = await this.state.storage.list({
-            prefix: ANNOUNCEMENT_KEY_PREFIX,
-        });
+        const [announcementEntries, statsEntries] = await Promise.all([
+            this.state.storage.list({ prefix: ANNOUNCEMENT_KEY_PREFIX }),
+            this.state.storage.list({ prefix: STATS_KEY_PREFIX }),
+        ]);
+
+        // Build stats lookup
+        const statsMap = new Map<string, RoomStats>();
+        for (const [key, raw] of statsEntries) {
+            if (!raw || typeof raw !== 'object') continue;
+            const roomName = key.slice(STATS_KEY_PREFIX.length);
+            statsMap.set(roomName, raw as RoomStats);
+        }
+
         const now = Math.floor(Date.now() / 1000);
         const rooms: AnnouncementSummary[] = [];
         const expiredKeys: string[] = [];
 
-        for (const [key, raw] of entries) {
+        for (const [key, raw] of announcementEntries) {
             if (!raw || typeof raw !== 'object') continue;
             const record = raw as StoredAnnouncement;
             if (record.v !== SCHEMA_VERSION) {
@@ -209,6 +232,7 @@ export class DirectoryDurableObject {
                 expiredKeys.push(key);
                 continue;
             }
+            const stats = statsMap.get(record.room);
             rooms.push({
                 room: record.room,
                 description: record.description,
@@ -216,11 +240,16 @@ export class DirectoryDurableObject {
                 announcer_identity: record.announcer_identity,
                 announced_at: record.announced_at,
                 expires_at: record.expires_at,
+                ...(stats && {
+                    agent_count: stats.agent_count,
+                    viewer_count: stats.viewer_count,
+                    message_count: stats.message_count,
+                    last_activity_at: stats.last_activity_at,
+                }),
             });
         }
 
-        // Lazy expiry — sweep expired entries while we're here. Fire-and-
-        // forget so we don't block the response.
+        // Lazy expiry — sweep expired entries while we're here.
         if (expiredKeys.length > 0) {
             Promise.all(
                 expiredKeys.map((k) =>
@@ -237,7 +266,11 @@ export class DirectoryDurableObject {
             );
         }
 
-        rooms.sort((a, b) => b.announced_at - a.announced_at);
+        // Sort by last activity (most recent first), fall back to announced_at
+        rooms.sort((a, b) =>
+            (b.last_activity_at ?? b.announced_at) -
+            (a.last_activity_at ?? a.announced_at)
+        );
 
         return new Response(JSON.stringify({ rooms }), {
             status: 200,
@@ -502,6 +535,41 @@ export class DirectoryDurableObject {
             success: true,
             room,
         });
+    }
+
+    /** Accept live stats from a RoomDO. Only stores if the room has an
+     *  active announcement — non-public rooms are silently ignored. */
+    private async handleStatsUpdate(request: Request): Promise<Response> {
+        let body: unknown;
+        try {
+            body = await request.json();
+        } catch {
+            return jsonError(400, 'invalid json');
+        }
+        const stats = body as {
+            room?: string;
+            agent_count?: number;
+            viewer_count?: number;
+            message_count?: number;
+            last_activity_at?: number;
+        };
+        if (typeof stats.room !== 'string') {
+            return jsonError(400, 'missing room');
+        }
+        // Only store stats if the room has an active announcement
+        const announcement = await this.state.storage.get(
+            ANNOUNCEMENT_KEY_PREFIX + stats.room
+        );
+        if (!announcement) {
+            return jsonResult({ stored: false });
+        }
+        await this.state.storage.put(STATS_KEY_PREFIX + stats.room, {
+            agent_count: stats.agent_count ?? 0,
+            viewer_count: stats.viewer_count ?? 0,
+            message_count: stats.message_count ?? 0,
+            last_activity_at: stats.last_activity_at ?? 0,
+        } satisfies RoomStats);
+        return jsonResult({ stored: true });
     }
 }
 

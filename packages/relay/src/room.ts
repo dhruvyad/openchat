@@ -285,6 +285,31 @@ export class RelayCore {
         return this.rooms.has(roomName);
     }
 
+    /** Live stats for a room — used by the worker to push to DirectoryDO. */
+    getRoomStats(roomName: string): {
+        agentCount: number;
+        viewerCount: number;
+        messageCount: number;
+        lastActivityAt: number;
+    } | null {
+        const room = this.rooms.get(roomName);
+        if (!room) return null;
+        let agentCount = 0;
+        let viewerCount = 0;
+        for (const a of room.agents.values()) {
+            if (!a.joined) continue;
+            if (a.viewer) viewerCount++;
+            else agentCount++;
+        }
+        const lastMsg = room.recentMessages[room.recentMessages.length - 1];
+        return {
+            agentCount,
+            viewerCount,
+            messageCount: room.recentMessages.length,
+            lastActivityAt: lastMsg?.at ?? 0,
+        };
+    }
+
     /** Count of live ws connections the core is tracking. Diagnostic only. */
     get connectionCount(): number {
         return this.connections.size;

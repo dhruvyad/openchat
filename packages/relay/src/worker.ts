@@ -93,8 +93,11 @@ export default {
  * room-level data and from `ws.deserializeAttachment()` for per-connection
  * agent state. See HIBERNATION.md.
  */
+const STATS_DEBOUNCE_MS = 60_000;
+
 export class RoomDurableObject {
     private state: DurableObjectState;
+    private env: Env;
     private store: RoomStore;
     private core: RelayCore;
     private logger: Logger;
@@ -102,9 +105,12 @@ export class RoomDurableObject {
     private pendingWrites: Promise<void>[] = [];
     private initialized: Promise<void>;
     private roomName: string | null = null;
+    private statsTimer: ReturnType<typeof setTimeout> | null = null;
+    private statsDirty = false;
 
-    constructor(state: DurableObjectState, _env: Env) {
+    constructor(state: DurableObjectState, env: Env) {
         this.state = state;
+        this.env = env;
         this.logger = {
             warn: (event, fields) => logEvent('warn', event, fields),
             error: (event, fields) => logEvent('error', event, fields),
@@ -446,6 +452,42 @@ export class RoomDurableObject {
         ws.serializeAttachment(attachment);
     }
 
+    /** Mark stats as dirty — will push to DirectoryDO within STATS_DEBOUNCE_MS. */
+    private scheduleStatsPush() {
+        this.statsDirty = true;
+        if (this.statsTimer) return; // already scheduled
+        this.statsTimer = setTimeout(() => {
+            this.statsTimer = null;
+            if (!this.statsDirty || !this.roomName) return;
+            this.statsDirty = false;
+            this.pushStats().catch((err) => {
+                logEvent('warn', 'openroom.stats_push_failed', {
+                    room: this.roomName,
+                    err: String(err),
+                });
+            });
+        }, STATS_DEBOUNCE_MS);
+    }
+
+    private async pushStats(): Promise<void> {
+        if (!this.roomName) return;
+        const stats = this.core.getRoomStats(this.roomName);
+        if (!stats) return;
+        const id = this.env.DIRECTORY_DO.idFromName(DIRECTORY_SINGLETON);
+        const stub = this.env.DIRECTORY_DO.get(id);
+        await stub.fetch(new Request('http://internal/__internal/room-stats', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                room: this.roomName,
+                agent_count: stats.agentCount,
+                viewer_count: stats.viewerCount,
+                message_count: stats.messageCount,
+                last_activity_at: stats.lastActivityAt,
+            }),
+        }));
+    }
+
     private makeHooks(): RelayCoreHooks {
         return {
             topicCreated: (record) => {
@@ -512,8 +554,10 @@ export class RoomDurableObject {
             },
             agentMutated: (ws) => {
                 this.dirtyAgents.add(ws as WebSocket);
+                this.scheduleStatsPush();
             },
             messagePersisted: (record) => {
+                this.scheduleStatsPush();
                 this.pendingWrites.push(
                     this.store
                         .putMessage({

@@ -87,18 +87,39 @@ export default async function HomePage() {
                             <li key={r.room}>
                                 <Link
                                     href={`/r/${encodeURIComponent(r.room)}`}
-                                    className="flex flex-col gap-1 p-4 hover:bg-fd-muted"
+                                    className="flex flex-col gap-1.5 p-4 hover:bg-fd-muted"
                                 >
-                                    <span className="font-mono text-sm font-semibold">
-                                        {r.room}
-                                    </span>
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-mono text-sm font-semibold">
+                                            {r.room}
+                                        </span>
+                                        {r.last_activity_at ? (
+                                            <span className="text-xs text-fd-muted-foreground">
+                                                active {formatRelativeTime(r.last_activity_at)}
+                                            </span>
+                                        ) : (
+                                            <span className="text-xs text-fd-muted-foreground">
+                                                announced {formatRelativeTime(r.announced_at)}
+                                            </span>
+                                        )}
+                                    </div>
                                     <span className="text-sm text-fd-muted-foreground">
                                         {r.description}
                                     </span>
-                                    <span className="text-xs text-fd-muted-foreground">
-                                        announced{' '}
-                                        {formatRelativeTime(r.announced_at)}
-                                    </span>
+                                    <div className="flex items-center gap-3 text-xs text-fd-muted-foreground">
+                                        {(r.agent_count ?? 0) > 0 && (
+                                            <span>{r.agent_count} agent{r.agent_count === 1 ? '' : 's'}</span>
+                                        )}
+                                        {(r.viewer_count ?? 0) > 0 && (
+                                            <span>{r.viewer_count} viewing</span>
+                                        )}
+                                        {(r.message_count ?? 0) > 0 && (
+                                            <span>{r.message_count} message{r.message_count === 1 ? '' : 's'}</span>
+                                        )}
+                                        {!(r.agent_count || r.viewer_count || r.message_count) && (
+                                            <span>no activity yet</span>
+                                        )}
+                                    </div>
                                 </Link>
                             </li>
                         ))}
